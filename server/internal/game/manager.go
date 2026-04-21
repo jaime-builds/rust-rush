@@ -11,7 +11,7 @@ import (
 type GameState struct {
 	RoomID   string          `json:"room_id"`
 	Players  []string        `json:"players"`
-	GameData json.RawMessage `json:"game_data"` // Raw JSON from Rust engine
+	GameData json.RawMessage `json:"game_data"`
 }
 
 // Manager handles multiple game rooms
@@ -94,7 +94,6 @@ func (m *Manager) AddPlayer(roomID, playerID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Try shooting room first
 	if room, exists := m.shootingRooms[roomID]; exists {
 		room.mu.Lock()
 		room.Players = append(room.Players, playerID)
@@ -102,7 +101,6 @@ func (m *Manager) AddPlayer(roomID, playerID string) bool {
 		return true
 	}
 
-	// Fall back to legacy room
 	room, exists := m.rooms[roomID]
 	if !exists {
 		return false
@@ -117,7 +115,6 @@ func (m *Manager) RemovePlayer(roomID, playerID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Try shooting room first
 	if room, exists := m.shootingRooms[roomID]; exists {
 		room.mu.Lock()
 		for i, id := range room.Players {
@@ -130,7 +127,6 @@ func (m *Manager) RemovePlayer(roomID, playerID string) {
 		return
 	}
 
-	// Fall back to legacy room
 	room, exists := m.rooms[roomID]
 	if !exists {
 		return
@@ -148,7 +144,7 @@ func (m *Manager) RemovePlayer(roomID, playerID string) {
 func (m *Manager) StartGameLoop(roomID string) {
 	log.Printf("🎮 Starting game loop for room: %s", roomID)
 
-	ticker := time.NewTicker(time.Second / 60) // 60 FPS
+	ticker := time.NewTicker(time.Second / 60)
 	defer ticker.Stop()
 
 	frameCount := 0
@@ -164,42 +160,105 @@ func (m *Manager) StartGameLoop(roomID string) {
 			return
 		}
 
-		// Update game state
-		room.Update(1.0 / 60.0) // deltaTime in seconds
+		room.Update(1.0 / 60.0)
 
-		// Get snapshot for broadcasting
 		snapshot := room.GetSnapshot()
 
-		// Log every 60 frames (once per second)
 		frameCount++
 		if frameCount%60 == 0 {
 			elapsed := time.Since(lastLog)
 			fps := float64(60) / elapsed.Seconds()
-			log.Printf("📊 Room %s - FPS: %.1f | Towers: %d | Enemies: %d | Projectiles: %d",
-				roomID, fps, len(snapshot.Towers), len(snapshot.Enemies), len(snapshot.Projectiles))
+			log.Printf("📊 Room %s - FPS: %.1f | Phase: %s | Wave: %d | Towers: %d | Enemies: %d | Projectiles: %d",
+				roomID, fps, snapshot.Phase, snapshot.Wave, len(snapshot.Towers), len(snapshot.Enemies), len(snapshot.Projectiles))
 			lastLog = time.Now()
 		}
 
-		// Marshal to JSON
 		data, err := json.Marshal(snapshot)
 		if err != nil {
 			log.Printf("❌ Failed to marshal game state: %v", err)
 			continue
 		}
 
-		// Send to broadcast channel
 		select {
 		case m.broadcast <- BroadcastMessage{
 			RoomID: roomID,
 			Data:   data,
 		}:
 		default:
-			// Channel full, skip this frame
-			if frameCount%300 == 0 { // Log every 5 seconds if channel is full
+			if frameCount%300 == 0 {
 				log.Printf("⚠️ Broadcast channel full for room %s", roomID)
 			}
 		}
 	}
+}
+
+// SpawnWave spawns enemies for the current wave with delays between spawns.
+func (m *Manager) SpawnWave(roomID string) {
+	m.mu.RLock()
+	room, exists := m.shootingRooms[roomID]
+	m.mu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	snapshot := room.GetSnapshot()
+	waveNum := snapshot.Wave
+	config := GetWaveConfig(waveNum)
+
+	total := 0
+	for _, group := range config.Enemies {
+		total += group.Count
+	}
+
+	log.Printf("🌊 Starting wave %d — %d enemies total", waveNum, total)
+	room.StartWave(total)
+
+	// Capture the cancel channel for THIS wave
+	cancel := room.GetSpawnCancel()
+
+	path := room.FindPathFromSpawn()
+	if path == nil {
+		log.Printf("⚠️ No path found for wave spawn in room %s", roomID)
+		return
+	}
+
+	for _, group := range config.Enemies {
+		for i := 0; i < group.Count; i++ {
+			// Check if cancelled (new game started)
+			select {
+			case <-cancel:
+				log.Printf("🛑 Wave %d spawn cancelled (new game)", waveNum)
+				return
+			default:
+			}
+
+			if room.GetPhase() == PhaseGameOver {
+				return
+			}
+
+			currentPath := room.FindPathFromSpawn()
+			if currentPath != nil {
+				path = currentPath
+				room.AddEnemy(group.EnemyType, path)
+				log.Printf("👾 Spawned %s enemy (%d/%d) in wave %d", group.EnemyType, i+1, group.Count, waveNum)
+			} else {
+				log.Printf("⚠️ Path blocked, skipping enemy %d/%d in wave %d", i+1, group.Count, waveNum)
+			}
+
+			room.DecrementEnemiesRemaining()
+
+			// Wait before next spawn, but bail early if cancelled
+			select {
+			case <-cancel:
+				log.Printf("🛑 Wave %d spawn cancelled during delay (new game)", waveNum)
+				return
+			case <-time.After(time.Duration(group.SpawnDelay * float64(time.Second))):
+			}
+		}
+	}
+
+	log.Printf("✅ Wave %d spawn complete", waveNum)
 }
 
 // GetBroadcastChannel returns the broadcast channel for the hub to read from

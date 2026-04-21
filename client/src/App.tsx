@@ -9,23 +9,27 @@ const ROOM_ID = 'game-1'
 const GRID_WIDTH = 20
 const GRID_HEIGHT = 15
 
+const defaultGameState: GameState = {
+  towers: [],
+  enemies: [],
+  projectiles: [],
+  muzzle_flashes: [],
+  explosions: [],
+  gold: 200,
+  health: 100,
+  wave: 1,
+  phase: 'waiting',
+  enemies_remaining: 0,
+  game_time: 0,
+  spawn_point: { x: 0, y: 7 },
+  goal_point: { x: 19, y: 7 },
+}
+
 function App() {
   const { status, lastMessage, sendMessage } = useWebSocket(WS_URL)
   const [hasJoined, setHasJoined] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
-  const [gameState, setGameState] = useState<GameState>({
-    towers: [],
-    enemies: [],
-    projectiles: [],
-    muzzle_flashes: [],
-    explosions: [],
-    gold: 200,
-    health: 100,
-    wave: 1,
-    game_time: 0,
-    spawn_point: { x: 0, y: 7 },
-    goal_point: { x: 19, y: 7 },
-  })
+  const [gameState, setGameState] = useState<GameState>(defaultGameState)
 
   useEffect(() => {
     if (status.isConnected && !hasJoined) {
@@ -48,10 +52,11 @@ function App() {
 
     if (lastMessage.type === 'game_state') {
       if (lastMessage.payload?.state) {
+        const incoming = lastMessage.payload.state
         setGameState({
-          ...lastMessage.payload.state,
-          spawn_point: lastMessage.payload.state.spawn_point || gameState.spawn_point,
-          goal_point: lastMessage.payload.state.goal_point || gameState.goal_point,
+          ...incoming,
+          spawn_point: incoming.spawn_point || gameState.spawn_point,
+          goal_point: incoming.goal_point || gameState.goal_point,
         })
       }
     }
@@ -65,24 +70,19 @@ function App() {
       blocked.add(`${tx},${ty}`)
     })
 
-    const queue: { pos: Position, path: Position[] }[] = [{ 
-      pos: start, 
-      path: [start] 
-    }]
+    const queue: { pos: Position, path: Position[] }[] = [{ pos: start, path: [start] }]
     const visited = new Set<string>()
     visited.add(`${Math.round(start.x)},${Math.round(start.y)}`)
 
     while (queue.length > 0) {
       const { pos, path } = queue.shift()!
-      
+
       const px = Math.round(pos.x)
       const py = Math.round(pos.y)
       const gx = Math.round(goal.x)
       const gy = Math.round(goal.y)
 
-      if (px === gx && py === gy) {
-        return path
-      }
+      if (px === gx && py === gy) return path
 
       const neighbors = [
         { x: px + 1, y: py },
@@ -93,20 +93,10 @@ function App() {
 
       for (const next of neighbors) {
         const key = `${next.x},${next.y}`
-
-        if (next.x < 0 || next.x >= GRID_WIDTH || next.y < 0 || next.y >= GRID_HEIGHT) {
-          continue
-        }
-
-        if (blocked.has(key) || visited.has(key)) {
-          continue
-        }
-
+        if (next.x < 0 || next.x >= GRID_WIDTH || next.y < 0 || next.y >= GRID_HEIGHT) continue
+        if (blocked.has(key) || visited.has(key)) continue
         visited.add(key)
-        queue.push({ 
-          pos: next, 
-          path: [...path, next] 
-        })
+        queue.push({ pos: next, path: [...path, next] })
       }
     }
 
@@ -115,7 +105,6 @@ function App() {
 
   const handlePlaceTower = (x: number, y: number, towerType: string) => {
     if (!hasJoined) return
-    
     sendMessage({
       type: 'place_tower',
       room_id: ROOM_ID,
@@ -123,33 +112,45 @@ function App() {
     })
   }
 
-  const handleSpawnEnemy = () => {
+  const handleSellTower = (towerId: number) => {
     if (!hasJoined) return
-
-    const spawn = gameState.spawn_point || { x: 0, y: 7 }
-    const goal = gameState.goal_point || { x: 19, y: 7 }
-    const path = findPath(spawn, goal, gameState.towers)
-
-    if (!path) {
-      alert('Path is completely blocked!')
-      return
-    }
-    
     sendMessage({
-      type: 'spawn_enemy',
+      type: 'remove_tower',
       room_id: ROOM_ID,
-      payload: {
-        enemy_type: 'basic',
-        path: path
-      }
+      payload: { tower_id: towerId }
     })
+  }
+
+  const handleStartWave = () => {
+    if (!hasJoined || gameState.phase !== 'waiting') return
+    sendMessage({ type: 'start_wave', room_id: ROOM_ID })
+  }
+
+  const handleNewGame = () => {
+    if (!hasJoined) return
+    sendMessage({ type: 'new_game', room_id: ROOM_ID })
+    setGameState(defaultGameState)
   }
 
   const handleClearAll = () => {
     if (!hasJoined) return
+    sendMessage({ type: 'clear_all', room_id: ROOM_ID })
+  }
+
+  // Keep spawn enemy for debug purposes
+  const handleSpawnEnemy = () => {
+    if (!hasJoined) return
+    const spawn = gameState.spawn_point || { x: 0, y: 7 }
+    const goal = gameState.goal_point || { x: 19, y: 7 }
+    const path = findPath(spawn, goal, gameState.towers)
+    if (!path) {
+      alert('Path is completely blocked!')
+      return
+    }
     sendMessage({
-      type: 'clear_all',
-      room_id: ROOM_ID
+      type: 'spawn_enemy',
+      room_id: ROOM_ID,
+      payload: { enemy_type: 'basic', path }
     })
   }
 
@@ -162,7 +163,7 @@ function App() {
           <span style={{ color: status.isConnected ? '#4CAF50' : '#999' }}>
             {status.isConnected ? 'Connected' : 'Connecting...'}
           </span>
-          <button 
+          <button
             onClick={() => setShowDebug(!showDebug)}
             style={{
               marginLeft: '15px',
@@ -180,8 +181,8 @@ function App() {
         </div>
 
         {showDebug && (
-          <div className="debug-info" style={{ 
-            fontSize: '11px', 
+          <div className="debug-info" style={{
+            fontSize: '11px',
             marginTop: '10px',
             background: 'rgba(0,0,0,0.6)',
             padding: '12px',
@@ -193,38 +194,27 @@ function App() {
             justifyContent: 'center',
             alignItems: 'flex-start'
           }}>
-            {/* Game Stats Section */}
-            <div style={{ 
-              background: 'rgba(255,255,255,0.05)', 
-              padding: '8px 12px', 
-              borderRadius: '4px',
-              minWidth: '200px'
-            }}>
+            <div style={{ background: 'rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: '4px', minWidth: '200px' }}>
               <strong style={{ display: 'block', marginBottom: '5px', color: '#4CAF50' }}>📊 Game State</strong>
+              <div>Phase: {gameState.phase}</div>
               <div>🗼 Towers: {gameState.towers?.length ?? 0}</div>
               <div>🦀 Enemies: {gameState.enemies?.length ?? 0}</div>
               <div>💥 Projectiles: {gameState.projectiles?.length ?? 0}</div>
               <div>💰 Gold: {gameState.gold ?? 0}</div>
               <div>❤️ Health: {gameState.health ?? 0}</div>
+              <div>🌊 Wave: {gameState.wave}</div>
+              <div>👾 Remaining: {gameState.enemies_remaining}</div>
             </div>
 
-            {/* Towers Section */}
             {gameState.towers && gameState.towers.length > 0 && (
-              <div style={{ 
-                background: 'rgba(255,255,255,0.05)', 
-                padding: '8px 12px', 
-                borderRadius: '4px',
-                maxWidth: '400px',
-                maxHeight: '150px',
-                overflowY: 'auto'
-              }}>
+              <div style={{ background: 'rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: '4px', maxWidth: '400px', maxHeight: '150px', overflowY: 'auto' }}>
                 <strong style={{ display: 'block', marginBottom: '5px', color: '#2196F3' }}>🗼 Towers ({gameState.towers.length})</strong>
                 <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
                   {gameState.towers.map((tower, idx) => (
                     <div key={tower.id} style={{ fontSize: '10px', minWidth: '120px' }}>
-                      <strong>#{idx + 1}</strong> {tower.tower_type}<br/>
-                      Rot: {tower.rotation?.toFixed(2) ?? 'N/A'}<br/>
-                      CD: {tower.cooldown?.toFixed(2) ?? 'N/A'}<br/>
+                      <strong>#{idx + 1}</strong> {tower.tower_type}<br />
+                      Rot: {tower.rotation?.toFixed(2) ?? 'N/A'}<br />
+                      CD: {tower.cooldown?.toFixed(2) ?? 'N/A'}<br />
                       Target: {tower.current_target || 'None'}
                     </div>
                   ))}
@@ -232,19 +222,13 @@ function App() {
               </div>
             )}
 
-            {/* Enemies Section */}
             {gameState.enemies && gameState.enemies.length > 0 && (
-              <div style={{ 
-                background: 'rgba(255,255,255,0.05)', 
-                padding: '8px 12px', 
-                borderRadius: '4px',
-                maxWidth: '300px'
-              }}>
+              <div style={{ background: 'rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: '4px', maxWidth: '300px' }}>
                 <strong style={{ display: 'block', marginBottom: '5px', color: '#ff4444' }}>🦀 Enemies ({gameState.enemies.length})</strong>
                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                   {gameState.enemies.map(enemy => (
                     <div key={enemy.id} style={{ fontSize: '10px' }}>
-                      #{enemy.id}: {enemy.health.toFixed(0)}/{enemy.max_health}
+                      #{enemy.id} ({enemy.enemy_type}): {enemy.health.toFixed(0)}/{enemy.max_health}
                     </div>
                   ))}
                 </div>
@@ -253,15 +237,18 @@ function App() {
           </div>
         )}
       </header>
-      
+
       <main>
-        <GameCanvas 
+        <GameCanvas
           isConnected={status.isConnected && hasJoined}
           gameState={gameState}
           onPlaceTower={handlePlaceTower}
-          onStartWave={() => {}}
+          onSellTower={handleSellTower}
+          onStartWave={handleStartWave}
+          onNewGame={handleNewGame}
           onClearTowers={handleClearAll}
           onSpawnEnemy={handleSpawnEnemy}
+          showDebug={showDebug}
         />
       </main>
 

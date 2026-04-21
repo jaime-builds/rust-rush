@@ -18,6 +18,7 @@ const (
 	MessageTypePauseGame   = "pause_game"
 	MessageTypeSpawnEnemy  = "spawn_enemy"
 	MessageTypeClearAll    = "clear_all"
+	MessageTypeNewGame     = "new_game"
 )
 
 // Message represents a WebSocket message

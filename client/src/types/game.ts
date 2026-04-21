@@ -5,6 +5,7 @@ export interface Position {
 
 export type TowerType = 'basic' | 'sniper' | 'splash' | 'slow'
 export type EnemyType = 'basic' | 'fast' | 'tank' | 'flying' | 'boss'
+export type GamePhase = 'waiting' | 'active' | 'game_over'
 
 export interface Tower {
   id: number
@@ -63,7 +64,17 @@ export interface GameState {
   gold: number
   health: number
   wave: number
+  phase: GamePhase
+  enemies_remaining: number
   game_time: number
   spawn_point?: Position
   goal_point?: Position
+}
+
+// Tower costs — kept in sync with server
+export const TOWER_COSTS: Record<TowerType, number> = {
+  basic: 50,
+  sniper: 100,
+  splash: 75,
+  slow: 60,
 }

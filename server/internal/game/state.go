@@ -6,6 +6,74 @@ import (
 	"sync"
 )
 
+// GamePhase represents the current phase of the game
+type GamePhase string
+
+const (
+	PhaseWaiting  GamePhase = "waiting"
+	PhaseActive   GamePhase = "active"
+	PhaseGameOver GamePhase = "game_over"
+)
+
+// WaveEnemy defines one enemy entry in a wave definition
+type WaveEnemy struct {
+	EnemyType  string
+	Count      int
+	SpawnDelay float64
+}
+
+// WaveConfig defines what enemies spawn in a given wave
+type WaveConfig struct {
+	Wave    int
+	Enemies []WaveEnemy
+}
+
+// GetWaveConfig returns the enemy configuration for a given wave number
+func GetWaveConfig(wave int) WaveConfig {
+	switch {
+	case wave <= 3:
+		count := 5 + (wave-1)*2
+		delay := 2.0 - float64(wave-1)*0.2
+		return WaveConfig{Wave: wave, Enemies: []WaveEnemy{
+			{EnemyType: "basic", Count: count, SpawnDelay: delay},
+		}}
+	case wave <= 6:
+		basicCount := 6 + (wave-4)*2
+		fastCount := 2 + (wave - 4)
+		delay := 1.5 - float64(wave-4)*0.1
+		return WaveConfig{Wave: wave, Enemies: []WaveEnemy{
+			{EnemyType: "basic", Count: basicCount, SpawnDelay: delay},
+			{EnemyType: "fast", Count: fastCount, SpawnDelay: delay * 0.7},
+		}}
+	case wave <= 10:
+		basicCount := 8 + (wave-7)*2
+		fastCount := 3 + (wave - 7)
+		tankCount := 1 + (wave-7)/2
+		delay := 1.2 - float64(wave-7)*0.05
+		return WaveConfig{Wave: wave, Enemies: []WaveEnemy{
+			{EnemyType: "basic", Count: basicCount, SpawnDelay: delay},
+			{EnemyType: "fast", Count: fastCount, SpawnDelay: delay * 0.6},
+			{EnemyType: "tank", Count: tankCount, SpawnDelay: delay * 1.5},
+		}}
+	default:
+		extra := wave - 11
+		basicCount := 10 + extra*2
+		fastCount := 4 + extra
+		tankCount := 2 + extra/2
+		bossCount := wave / 5
+		delay := math.Max(0.8-float64(extra)*0.05, 0.4)
+		enemies := []WaveEnemy{
+			{EnemyType: "basic", Count: basicCount, SpawnDelay: delay},
+			{EnemyType: "fast", Count: fastCount, SpawnDelay: delay * 0.6},
+			{EnemyType: "tank", Count: tankCount, SpawnDelay: delay * 1.5},
+		}
+		if bossCount > 0 {
+			enemies = append(enemies, WaveEnemy{EnemyType: "boss", Count: bossCount, SpawnDelay: 3.0})
+		}
+		return WaveConfig{Wave: wave, Enemies: enemies}
+	}
+}
+
 // Position represents a 2D coordinate
 type Position struct {
 	X float64 `json:"x"`
@@ -20,10 +88,10 @@ type Tower struct {
 	Level         int      `json:"level"`
 	Range         float64  `json:"range"`
 	Damage        float64  `json:"damage"`
-	FireRate      float64  `json:"fire_rate"`                // shots per second
-	Cooldown      float64  `json:"cooldown"`                 // time until next shot
-	Rotation      float64  `json:"rotation"`                 // radians, for rendering
-	CurrentTarget int      `json:"current_target,omitempty"` // enemy ID being targeted
+	FireRate      float64  `json:"fire_rate"`
+	Cooldown      float64  `json:"cooldown"`
+	Rotation      float64  `json:"rotation"`
+	CurrentTarget int      `json:"current_target,omitempty"`
 }
 
 // Enemy represents a hostile unit
@@ -42,7 +110,7 @@ type Enemy struct {
 type Projectile struct {
 	ID       int      `json:"id"`
 	Position Position `json:"position"`
-	TargetID int      `json:"target_id"` // enemy ID
+	TargetID int      `json:"target_id"`
 	Speed    float64  `json:"speed"`
 	Damage   float64  `json:"damage"`
 	TowerID  int      `json:"tower_id"`
@@ -52,18 +120,18 @@ type Projectile struct {
 type MuzzleFlash struct {
 	ID       int      `json:"id"`
 	Position Position `json:"position"`
-	Duration float64  `json:"duration"` // seconds remaining
+	Duration float64  `json:"duration"`
 }
 
 // Explosion represents a visual effect when projectile hits
 type Explosion struct {
 	ID       int      `json:"id"`
 	Position Position `json:"position"`
-	Duration float64  `json:"duration"` // seconds remaining
+	Duration float64  `json:"duration"`
 	Radius   float64  `json:"radius"`
 }
 
-// GameStateWithShooting extends GameState with shooting mechanics
+// GameStateWithShooting is the main game state
 type GameStateWithShooting struct {
 	RoomID           string        `json:"room_id"`
 	Players          []string      `json:"players"`
@@ -75,6 +143,8 @@ type GameStateWithShooting struct {
 	Gold             int           `json:"gold"`
 	Health           int           `json:"health"`
 	Wave             int           `json:"wave"`
+	Phase            GamePhase     `json:"phase"`
+	EnemiesRemaining int           `json:"enemies_remaining"`
 	GameTime         float64       `json:"game_time"`
 	SpawnPoint       *Position     `json:"spawn_point,omitempty"`
 	GoalPoint        *Position     `json:"goal_point,omitempty"`
@@ -83,9 +153,9 @@ type GameStateWithShooting struct {
 	nextEnemyID      int
 	nextProjectileID int
 	nextEffectID     int
+	spawnCancel      chan struct{} // closed to cancel active spawn goroutine
 }
 
-// NewGameStateWithShooting creates a new game state
 func NewGameStateWithShooting(roomID string) *GameStateWithShooting {
 	return &GameStateWithShooting{
 		RoomID:           roomID,
@@ -98,45 +168,77 @@ func NewGameStateWithShooting(roomID string) *GameStateWithShooting {
 		Gold:             200,
 		Health:           100,
 		Wave:             1,
+		Phase:            PhaseWaiting,
+		EnemiesRemaining: 0,
 		GameTime:         0,
 		nextTowerID:      1,
 		nextEnemyID:      1,
 		nextProjectileID: 1,
 		nextEffectID:     1,
+		spawnCancel:      make(chan struct{}),
 	}
 }
 
-// Update runs game logic for one frame (60 FPS = ~16.67ms per frame)
+func (gs *GameStateWithShooting) Reset() {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
+	// Cancel any active spawn goroutine
+	close(gs.spawnCancel)
+	gs.spawnCancel = make(chan struct{})
+
+	gs.Towers = make([]Tower, 0)
+	gs.Enemies = make([]Enemy, 0)
+	gs.Projectiles = make([]Projectile, 0)
+	gs.MuzzleFlashes = make([]MuzzleFlash, 0)
+	gs.Explosions = make([]Explosion, 0)
+	gs.Gold = 200
+	gs.Health = 100
+	gs.Wave = 1
+	gs.Phase = PhaseWaiting
+	gs.EnemiesRemaining = 0
+	gs.GameTime = 0
+	gs.nextTowerID = 1
+	gs.nextEnemyID = 1
+	gs.nextProjectileID = 1
+	gs.nextEffectID = 1
+}
+
 func (gs *GameStateWithShooting) Update(deltaTime float64) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
+	if gs.Phase == PhaseGameOver || gs.Phase == PhaseWaiting {
+		gs.updateEffects(deltaTime)
+		return
+	}
+
 	gs.GameTime += deltaTime
-
-	// Update towers (cooldowns, targeting, shooting)
 	gs.updateTowers(deltaTime)
-
-	// Update projectiles (movement, collision)
 	gs.updateProjectiles(deltaTime)
-
-	// Update enemies (movement, health)
 	gs.updateEnemies(deltaTime)
-
-	// Update visual effects (decay)
 	gs.updateEffects(deltaTime)
+
+	if gs.Phase == PhaseActive && len(gs.Enemies) == 0 && gs.EnemiesRemaining == 0 {
+		gs.Projectiles = make([]Projectile, 0)
+		gs.Phase = PhaseWaiting
+		gs.Wave++
+	}
+
+	if gs.Health <= 0 {
+		gs.Health = 0
+		gs.Phase = PhaseGameOver
+	}
 }
 
-// updateTowers handles tower logic
 func (gs *GameStateWithShooting) updateTowers(deltaTime float64) {
 	for i := range gs.Towers {
 		tower := &gs.Towers[i]
 
-		// Reduce cooldown
 		if tower.Cooldown > 0 {
 			tower.Cooldown -= deltaTime
 		}
 
-		// Find target
 		target := gs.findNearestEnemy(tower.Position, tower.Range)
 		if target == nil {
 			tower.CurrentTarget = 0
@@ -144,29 +246,23 @@ func (gs *GameStateWithShooting) updateTowers(deltaTime float64) {
 		}
 
 		tower.CurrentTarget = target.ID
-
-		// Update rotation to face target
 		dx := target.Position.X - tower.Position.X
 		dy := target.Position.Y - tower.Position.Y
 		tower.Rotation = math.Atan2(dy, dx)
 
-		// Shoot if ready
 		if tower.Cooldown <= 0 {
 			gs.shootProjectile(tower, target)
 			tower.Cooldown = 1.0 / tower.FireRate
-
-			// Create muzzle flash effect
 			gs.MuzzleFlashes = append(gs.MuzzleFlashes, MuzzleFlash{
 				ID:       gs.nextEffectID,
 				Position: tower.Position,
-				Duration: 0.1, // 100ms flash
+				Duration: 0.1,
 			})
 			gs.nextEffectID++
 		}
 	}
 }
 
-// findNearestEnemy finds the closest enemy within range
 func (gs *GameStateWithShooting) findNearestEnemy(pos Position, maxRange float64) *Enemy {
 	var nearest *Enemy
 	minDist := math.MaxFloat64
@@ -174,45 +270,36 @@ func (gs *GameStateWithShooting) findNearestEnemy(pos Position, maxRange float64
 	for i := range gs.Enemies {
 		enemy := &gs.Enemies[i]
 		dist := distance(pos, enemy.Position)
-
 		if dist <= maxRange && dist < minDist {
 			minDist = dist
 			nearest = enemy
 		}
 	}
-
 	return nearest
 }
 
-// shootProjectile creates a new projectile
 func (gs *GameStateWithShooting) shootProjectile(tower *Tower, target *Enemy) {
-	// Projectile speed based on tower type
-	speed := 8.0 // cells per second
+	speed := 8.0
 	if tower.TowerType == "sniper" {
 		speed = 12.0
 	}
-
-	projectile := Projectile{
+	gs.Projectiles = append(gs.Projectiles, Projectile{
 		ID:       gs.nextProjectileID,
 		Position: tower.Position,
 		TargetID: target.ID,
 		Speed:    speed,
 		Damage:   tower.Damage,
 		TowerID:  tower.ID,
-	}
-
-	gs.Projectiles = append(gs.Projectiles, projectile)
+	})
 	gs.nextProjectileID++
 }
 
-// updateProjectiles moves projectiles and checks collisions
 func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
-	activeProjectiles := make([]Projectile, 0)
+	active := make([]Projectile, 0)
 
 	for i := range gs.Projectiles {
 		proj := &gs.Projectiles[i]
 
-		// Find target enemy
 		var target *Enemy
 		for j := range gs.Enemies {
 			if gs.Enemies[j].ID == proj.TargetID {
@@ -221,116 +308,91 @@ func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
 			}
 		}
 
-		// Remove projectile if target is gone
 		if target == nil {
 			continue
 		}
 
-		// Move projectile toward target
 		dx := target.Position.X - proj.Position.X
 		dy := target.Position.Y - proj.Position.Y
 		dist := math.Sqrt(dx*dx + dy*dy)
 
-		// Check if hit
-		if dist < 0.3 { // Hit radius
-			// Deal damage
+		if dist < 0.3 {
 			target.Health -= proj.Damage
-
-			// Create explosion effect
 			gs.Explosions = append(gs.Explosions, Explosion{
 				ID:       gs.nextEffectID,
 				Position: proj.Position,
-				Duration: 0.3, // 300ms explosion
+				Duration: 0.3,
 				Radius:   0.5,
 			})
 			gs.nextEffectID++
-
-			// Don't keep this projectile
 			continue
 		}
 
-		// Move projectile
 		if dist > 0 {
 			moveAmount := proj.Speed * deltaTime
 			ratio := moveAmount / dist
 			if ratio > 1.0 {
 				ratio = 1.0
 			}
-
 			proj.Position.X += dx * ratio
 			proj.Position.Y += dy * ratio
 		}
 
-		activeProjectiles = append(activeProjectiles, *proj)
+		active = append(active, *proj)
 	}
 
-	gs.Projectiles = activeProjectiles
+	gs.Projectiles = active
 }
 
-// updateEnemies moves enemies along paths and removes dead ones
 func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
-	aliveEnemies := make([]Enemy, 0)
+	alive := make([]Enemy, 0)
 
 	for i := range gs.Enemies {
 		enemy := &gs.Enemies[i]
 
-		// Remove if dead
 		if enemy.Health <= 0 {
-			// Award gold
-			gs.Gold += 10
+			gs.Gold += getEnemyGoldReward(enemy.EnemyType)
 			continue
 		}
 
-		// Move enemy along path
-		if enemy.Path != nil && len(enemy.Path) > 0 {
-			if enemy.PathIndex < len(enemy.Path) {
-				target := enemy.Path[enemy.PathIndex]
+		if enemy.Path != nil && len(enemy.Path) > 0 && enemy.PathIndex < len(enemy.Path) {
+			target := enemy.Path[enemy.PathIndex]
+			dx := target.X - enemy.Position.X
+			dy := target.Y - enemy.Position.Y
+			dist := math.Sqrt(dx*dx + dy*dy)
 
-				// Calculate direction to target
-				dx := target.X - enemy.Position.X
-				dy := target.Y - enemy.Position.Y
-				distance := math.Sqrt(dx*dx + dy*dy)
-
-				// If reached waypoint, move to next
-				if distance < 0.1 {
-					enemy.PathIndex++
-					if enemy.PathIndex < len(enemy.Path) {
-						target = enemy.Path[enemy.PathIndex]
-						dx = target.X - enemy.Position.X
-						dy = target.Y - enemy.Position.Y
-						distance = math.Sqrt(dx*dx + dy*dy)
-					}
+			if dist < 0.1 {
+				enemy.PathIndex++
+				if enemy.PathIndex < len(enemy.Path) {
+					target = enemy.Path[enemy.PathIndex]
+					dx = target.X - enemy.Position.X
+					dy = target.Y - enemy.Position.Y
+					dist = math.Sqrt(dx*dx + dy*dy)
 				}
+			}
 
-				// Move toward target
-				if distance > 0 && enemy.PathIndex < len(enemy.Path) {
-					moveDistance := enemy.Speed * deltaTime
-					ratio := moveDistance / distance
-					if ratio > 1.0 {
-						ratio = 1.0
-					}
-
-					enemy.Position.X += dx * ratio
-					enemy.Position.Y += dy * ratio
+			if dist > 0 && enemy.PathIndex < len(enemy.Path) {
+				moveDistance := enemy.Speed * deltaTime
+				ratio := moveDistance / dist
+				if ratio > 1.0 {
+					ratio = 1.0
 				}
+				enemy.Position.X += dx * ratio
+				enemy.Position.Y += dy * ratio
 			}
 		}
 
-		// Only keep enemies that haven't reached the end
 		if enemy.PathIndex < len(enemy.Path) {
-			aliveEnemies = append(aliveEnemies, *enemy)
+			alive = append(alive, *enemy)
 		} else {
-			// Enemy reached goal - player loses health
 			gs.Health -= 10
 		}
 	}
 
-	gs.Enemies = aliveEnemies
+	gs.Enemies = alive
 }
 
-// updateEffects decays visual effects
 func (gs *GameStateWithShooting) updateEffects(deltaTime float64) {
-	// Update muzzle flashes
 	activeFlashes := make([]MuzzleFlash, 0)
 	for i := range gs.MuzzleFlashes {
 		flash := &gs.MuzzleFlashes[i]
@@ -341,7 +403,6 @@ func (gs *GameStateWithShooting) updateEffects(deltaTime float64) {
 	}
 	gs.MuzzleFlashes = activeFlashes
 
-	// Update explosions
 	activeExplosions := make([]Explosion, 0)
 	for i := range gs.Explosions {
 		explosion := &gs.Explosions[i]
@@ -353,13 +414,17 @@ func (gs *GameStateWithShooting) updateEffects(deltaTime float64) {
 	gs.Explosions = activeExplosions
 }
 
-// AddTower adds a tower to the game
-func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) Tower {
+// AddTower adds a tower, deducting gold. Returns false if insufficient funds.
+func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) (Tower, bool) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
-	// Tower stats based on type
 	stats := getTowerStats(towerType)
+	cost := getTowerCost(towerType)
+
+	if gs.Gold < cost {
+		return Tower{}, false
+	}
 
 	tower := Tower{
 		ID:        gs.nextTowerID,
@@ -373,13 +438,37 @@ func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) Tower 
 		Rotation:  0,
 	}
 
+	gs.Gold -= cost
 	gs.Towers = append(gs.Towers, tower)
 	gs.nextTowerID++
-
-	// Recalculate paths for all active enemies
 	gs.RecalculateEnemyPaths()
 
-	return tower
+	return tower, true
+}
+
+// RemoveTower removes a tower by ID and refunds 70% of its cost.
+func (gs *GameStateWithShooting) RemoveTower(towerID int) (int, bool) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
+	for i, tower := range gs.Towers {
+		if tower.ID == towerID {
+			cost := getTowerCost(tower.TowerType)
+			refund := int(float64(cost) * 0.7)
+			gs.Gold += refund
+			gs.Towers = append(gs.Towers[:i], gs.Towers[i+1:]...)
+			active := make([]Projectile, 0)
+			for _, p := range gs.Projectiles {
+				if p.TowerID != towerID {
+					active = append(active, p)
+				}
+			}
+			gs.Projectiles = active
+			gs.RecalculateEnemyPaths()
+			return refund, true
+		}
+	}
+	return 0, false
 }
 
 // AddEnemy adds an enemy to the game
@@ -388,7 +477,6 @@ func (gs *GameStateWithShooting) AddEnemy(enemyType string, path []Position) Ene
 	defer gs.mu.Unlock()
 
 	stats := getEnemyStats(enemyType)
-
 	enemy := Enemy{
 		ID:        gs.nextEnemyID,
 		Position:  path[0],
@@ -402,48 +490,65 @@ func (gs *GameStateWithShooting) AddEnemy(enemyType string, path []Position) Ene
 
 	gs.Enemies = append(gs.Enemies, enemy)
 	gs.nextEnemyID++
-
 	return enemy
 }
 
-// RemoveAllTowers clears all towers
+func (gs *GameStateWithShooting) DecrementEnemiesRemaining() {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	if gs.EnemiesRemaining > 0 {
+		gs.EnemiesRemaining--
+	}
+}
+
+func (gs *GameStateWithShooting) StartWave(totalEnemies int) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	gs.Phase = PhaseActive
+	gs.EnemiesRemaining = totalEnemies
+}
+
+// GetSpawnCancel returns the cancel channel for the current spawn goroutine
+func (gs *GameStateWithShooting) GetSpawnCancel() <-chan struct{} {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	return gs.spawnCancel
+}
+
 func (gs *GameStateWithShooting) RemoveAllTowers() {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-
 	gs.Towers = make([]Tower, 0)
 	gs.Projectiles = make([]Projectile, 0)
 }
 
-// RemoveAllEnemies clears all enemies
 func (gs *GameStateWithShooting) RemoveAllEnemies() {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-
 	gs.Enemies = make([]Enemy, 0)
 	gs.Projectiles = make([]Projectile, 0)
 }
 
-// GetSnapshot returns a safe copy of the game state
 func (gs *GameStateWithShooting) GetSnapshot() *GameStateWithShooting {
 	gs.mu.RLock()
 	defer gs.mu.RUnlock()
 
-	// Create a copy
 	snapshot := &GameStateWithShooting{
-		RoomID:        gs.RoomID,
-		Players:       make([]string, len(gs.Players)),
-		Towers:        make([]Tower, len(gs.Towers)),
-		Enemies:       make([]Enemy, len(gs.Enemies)),
-		Projectiles:   make([]Projectile, len(gs.Projectiles)),
-		MuzzleFlashes: make([]MuzzleFlash, len(gs.MuzzleFlashes)),
-		Explosions:    make([]Explosion, len(gs.Explosions)),
-		Gold:          gs.Gold,
-		Health:        gs.Health,
-		Wave:          gs.Wave,
-		GameTime:      gs.GameTime,
-		SpawnPoint:    gs.SpawnPoint,
-		GoalPoint:     gs.GoalPoint,
+		RoomID:           gs.RoomID,
+		Players:          make([]string, len(gs.Players)),
+		Towers:           make([]Tower, len(gs.Towers)),
+		Enemies:          make([]Enemy, len(gs.Enemies)),
+		Projectiles:      make([]Projectile, len(gs.Projectiles)),
+		MuzzleFlashes:    make([]MuzzleFlash, len(gs.MuzzleFlashes)),
+		Explosions:       make([]Explosion, len(gs.Explosions)),
+		Gold:             gs.Gold,
+		Health:           gs.Health,
+		Wave:             gs.Wave,
+		Phase:            gs.Phase,
+		EnemiesRemaining: gs.EnemiesRemaining,
+		GameTime:         gs.GameTime,
+		SpawnPoint:       gs.SpawnPoint,
+		GoalPoint:        gs.GoalPoint,
 	}
 
 	copy(snapshot.Players, gs.Players)
@@ -456,7 +561,19 @@ func (gs *GameStateWithShooting) GetSnapshot() *GameStateWithShooting {
 	return snapshot
 }
 
-// Helper functions
+func (gs *GameStateWithShooting) GetPhase() GamePhase {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	return gs.Phase
+}
+
+func (gs *GameStateWithShooting) GetSpawnGoal() (*Position, *Position) {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	return gs.SpawnPoint, gs.GoalPoint
+}
+
+// Helper types and functions
 
 type towerStats struct {
 	Range    float64
@@ -466,32 +583,28 @@ type towerStats struct {
 
 func getTowerStats(towerType string) towerStats {
 	stats := map[string]towerStats{
-		"basic": {
-			Range:    3.0,
-			Damage:   15.0,
-			FireRate: 1.0, // 1 shot per second
-		},
-		"sniper": {
-			Range:    6.0,
-			Damage:   50.0,
-			FireRate: 0.5, // 1 shot every 2 seconds
-		},
-		"splash": {
-			Range:    2.5,
-			Damage:   10.0,
-			FireRate: 1.5, // 1.5 shots per second
-		},
-		"slow": {
-			Range:    3.5,
-			Damage:   8.0,
-			FireRate: 0.8,
-		},
+		"basic":  {Range: 3.0, Damage: 15.0, FireRate: 1.0},
+		"sniper": {Range: 6.0, Damage: 50.0, FireRate: 0.5},
+		"splash": {Range: 2.5, Damage: 10.0, FireRate: 1.5},
+		"slow":   {Range: 3.5, Damage: 8.0, FireRate: 0.8},
 	}
-
 	if s, ok := stats[towerType]; ok {
 		return s
 	}
 	return stats["basic"]
+}
+
+func getTowerCost(towerType string) int {
+	costs := map[string]int{
+		"basic":  50,
+		"sniper": 100,
+		"splash": 75,
+		"slow":   60,
+	}
+	if c, ok := costs[towerType]; ok {
+		return c
+	}
+	return 50
 }
 
 type enemyStats struct {
@@ -501,32 +614,30 @@ type enemyStats struct {
 
 func getEnemyStats(enemyType string) enemyStats {
 	stats := map[string]enemyStats{
-		"basic": {
-			Health: 100.0,
-			Speed:  2.0,
-		},
-		"fast": {
-			Health: 50.0,
-			Speed:  4.0,
-		},
-		"tank": {
-			Health: 300.0,
-			Speed:  1.0,
-		},
-		"flying": {
-			Health: 80.0,
-			Speed:  3.0,
-		},
-		"boss": {
-			Health: 1000.0,
-			Speed:  0.5,
-		},
+		"basic":  {Health: 100.0, Speed: 2.0},
+		"fast":   {Health: 50.0, Speed: 4.0},
+		"tank":   {Health: 300.0, Speed: 1.0},
+		"flying": {Health: 80.0, Speed: 3.0},
+		"boss":   {Health: 1000.0, Speed: 0.5},
 	}
-
 	if s, ok := stats[enemyType]; ok {
 		return s
 	}
 	return stats["basic"]
+}
+
+func getEnemyGoldReward(enemyType string) int {
+	rewards := map[string]int{
+		"basic":  10,
+		"fast":   8,
+		"tank":   25,
+		"flying": 15,
+		"boss":   100,
+	}
+	if r, ok := rewards[enemyType]; ok {
+		return r
+	}
+	return 10
 }
 
 func distance(a, b Position) float64 {
@@ -535,21 +646,17 @@ func distance(a, b Position) float64 {
 	return math.Sqrt(dx*dx + dy*dy)
 }
 
-// BFS pathfinding around towers
 func (gs *GameStateWithShooting) findPath(start, goal Position) []Position {
 	const gridWidth = 20
 	const gridHeight = 15
 
-	// Create set of blocked cells (tower positions)
 	blocked := make(map[string]bool)
 	for _, tower := range gs.Towers {
 		tx := int(math.Round(tower.Position.X))
 		ty := int(math.Round(tower.Position.Y))
-		key := fmt.Sprintf("%d,%d", tx, ty)
-		blocked[key] = true
+		blocked[fmt.Sprintf("%d,%d", tx, ty)] = true
 	}
 
-	// BFS queue
 	type queueItem struct {
 		pos  Position
 		path []Position
@@ -568,14 +675,11 @@ func (gs *GameStateWithShooting) findPath(start, goal Position) []Position {
 
 		px := int(math.Round(current.pos.X))
 		py := int(math.Round(current.pos.Y))
-		currentKey := fmt.Sprintf("%d,%d", px, py)
 
-		// Check if reached goal
-		if currentKey == goalKey {
+		if fmt.Sprintf("%d,%d", px, py) == goalKey {
 			return current.path
 		}
 
-		// Try all 4 directions
 		neighbors := []Position{
 			{X: float64(px + 1), Y: float64(py)},
 			{X: float64(px - 1), Y: float64(py)},
@@ -588,12 +692,9 @@ func (gs *GameStateWithShooting) findPath(start, goal Position) []Position {
 			ny := int(math.Round(next.Y))
 			key := fmt.Sprintf("%d,%d", nx, ny)
 
-			// Check bounds
 			if nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight {
 				continue
 			}
-
-			// Check if blocked or visited
 			if blocked[key] || visited[key] {
 				continue
 			}
@@ -606,11 +707,9 @@ func (gs *GameStateWithShooting) findPath(start, goal Position) []Position {
 		}
 	}
 
-	// No path found - return nil
 	return nil
 }
 
-// RecalculateEnemyPaths recalculates paths for all active enemies
 func (gs *GameStateWithShooting) RecalculateEnemyPaths() {
 	if gs.GoalPoint == nil {
 		return
@@ -618,23 +717,27 @@ func (gs *GameStateWithShooting) RecalculateEnemyPaths() {
 
 	for i := range gs.Enemies {
 		enemy := &gs.Enemies[i]
-
-		// Find current position (rounded to grid)
 		currentPos := Position{
 			X: math.Round(enemy.Position.X),
 			Y: math.Round(enemy.Position.Y),
 		}
-
-		// Calculate new path from current position to goal
 		newPath := gs.findPath(currentPos, *gs.GoalPoint)
-
 		if newPath != nil {
 			enemy.Path = newPath
 			enemy.PathIndex = 0
 		} else {
-			// Enemy is trapped - stop them
 			enemy.Path = []Position{currentPos}
 			enemy.PathIndex = 0
 		}
 	}
+}
+
+func (gs *GameStateWithShooting) FindPathFromSpawn() []Position {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+
+	if gs.SpawnPoint == nil || gs.GoalPoint == nil {
+		return nil
+	}
+	return gs.findPath(*gs.SpawnPoint, *gs.GoalPoint)
 }

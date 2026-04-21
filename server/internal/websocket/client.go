@@ -148,8 +148,19 @@ func (c *Client) handleMessage(msg *Message) {
 			return
 		}
 
-		// Add tower to game state
-		tower := room.AddTower(x, y, towerType)
+		// Add tower to game state (deducts gold)
+		tower, ok := room.AddTower(x, y, towerType)
+		if !ok {
+			log.Printf("Client %s cannot afford %s tower", c.id, towerType)
+			response := Message{
+				Type: MessageTypePlaceTower,
+				Payload: map[string]interface{}{
+					"status": "insufficient_funds",
+				},
+			}
+			c.sendJSON(response)
+			return
+		}
 
 		log.Printf("Placed %s tower at (%.1f, %.1f) in room %s", towerType, x, y, roomID)
 
@@ -167,8 +178,34 @@ func (c *Client) handleMessage(msg *Message) {
 		c.sendJSON(response)
 
 	case MessageTypeRemoveTower:
-		log.Printf("Remove tower request: %v", msg.Payload)
-		// TODO: Implement tower removal
+		roomID := msg.RoomID
+		if roomID == "" {
+			roomID = c.roomID
+		}
+		if roomID == "" {
+			return
+		}
+		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
+		if !exists {
+			return
+		}
+		towerID, ok := msg.Payload["tower_id"].(float64)
+		if !ok {
+			log.Printf("Invalid tower_id in remove_tower: %v", msg.Payload)
+			return
+		}
+		refund, removed := room.RemoveTower(int(towerID))
+		if removed {
+			log.Printf("Sold tower %d for $%d in room %s", int(towerID), refund, roomID)
+			c.hub.BroadcastGameState(roomID)
+			c.sendJSON(Message{
+				Type: MessageTypeRemoveTower,
+				Payload: map[string]interface{}{
+					"status": "sold",
+					"refund": refund,
+				},
+			})
+		}
 
 	case MessageTypeSpawnEnemy:
 		// Use room_id from message if provided, otherwise use client's stored roomID
@@ -273,18 +310,48 @@ func (c *Client) handleMessage(msg *Message) {
 		c.sendJSON(response)
 
 	case MessageTypeStartWave:
-		log.Printf("Start wave request from client %s", c.id)
-		// TODO: Implement wave system
-
-		// Send acknowledgment
-		response := Message{
-			Type: MessageTypeGameState,
-			Payload: map[string]interface{}{
-				"action": "wave_started",
-				"wave":   1,
-			},
+		roomID := msg.RoomID
+		if roomID == "" {
+			roomID = c.roomID
 		}
-		c.sendJSON(response)
+
+		if roomID == "" {
+			log.Printf("Client %s tried to start wave but is not in a room", c.id)
+			return
+		}
+
+		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
+		if !exists {
+			return
+		}
+
+		// Only allow starting a wave in waiting phase
+		if room.GetPhase() != game.PhaseWaiting {
+			log.Printf("Client %s tried to start wave but game is not in waiting phase", c.id)
+			return
+		}
+
+		log.Printf("🌊 Client %s starting wave in room %s", c.id, roomID)
+		go c.hub.gameManager.SpawnWave(roomID)
+
+	case MessageTypeNewGame:
+		roomID := msg.RoomID
+		if roomID == "" {
+			roomID = c.roomID
+		}
+
+		if roomID == "" {
+			return
+		}
+
+		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
+		if !exists {
+			return
+		}
+
+		room.Reset()
+		log.Printf("🔄 New game started in room %s", roomID)
+		c.hub.BroadcastGameState(roomID)
 
 	case MessageTypePauseGame:
 		log.Printf("Pause game request from client %s", c.id)
