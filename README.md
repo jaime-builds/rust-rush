@@ -1,6 +1,6 @@
-# 🦀 Rust Rush - Tower Defense Game
+# 🦀 Rust Rush - Tower Defense
 
-A high-performance tower defense game showcasing Go's concurrency, modern web technologies, and real-time gameplay.
+A high-performance tower defense game built with Go, React, and WebSockets.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Go](https://img.shields.io/badge/go-1.21+-00ADD8.svg)
@@ -9,86 +9,98 @@ A high-performance tower defense game showcasing Go's concurrency, modern web te
 
 ## 🎮 Features
 
-### ✅ Fully Implemented (MVP Complete!)
+### ✅ Fully Implemented (Alpha Complete!)
 
 #### Core Gameplay
-- **Interactive Tower Placement** - Click to place 4 different tower types on a 20×15 grid
-- **Automatic Tower Shooting** - Towers detect, rotate, and shoot at enemies within range
-- **Smart Enemy Pathfinding** - Enemies use BFS algorithm to navigate around towers
-- **Real-time Animation** - Smooth 60 FPS rendering on both server and client
-- **Dynamic Path Recalculation** - Enemies instantly reroute when towers are placed mid-wave
-- **Health & Damage System** - Enemies take damage, die, and award gold
-- **Resource Management** - Gold system with rewards for kills
+- **Interactive Tower Placement** — Click to place 4 tower types on a 20×15 grid
+- **Tower Sell System** — Click any tower to select it, view stats, and sell for 70% refund
+- **Gold Economy** — Towers cost gold, enemies reward gold on death (scaled by type)
+- **Wave System** — Start waves manually or use Auto Wave with a 5-second countdown
+- **Enemy Progression** — Waves scale from basic enemies up to fast, tank, and boss types
+- **Smart Pathfinding** — Enemies use BFS to navigate around towers in real time
+- **Dynamic Rerouting** — Enemies instantly reroute when towers are placed mid-wave
+- **Health System** — Enemies deal 10 damage when reaching the goal; game ends at 0
+- **Game Over & New Game** — Full reset flow with a single click
 
 #### Visual Effects
-- **Projectile System** - Bullets with glowing trails fly toward enemies
-- **Muzzle Flashes** - 100ms flash effect when towers shoot
-- **Explosion Effects** - 300ms animated explosions on projectile hit
-- **Health Bars** - Real-time health visualization above enemies
-- **Tower Rotation** - Towers visually rotate to face their targets
-- **Range Indicators** - Red circles show tower attack range when active
+- **Projectile System** — Bullets with glowing trails fly toward enemies
+- **Muzzle Flashes** — 100ms flash when towers fire
+- **Explosion Effects** — 300ms animated explosions on hit
+- **Health Bars** — Real-time above each enemy
+- **Tower Rotation** — Towers rotate to face their current target
+- **Range Indicators** — Dashed circles show range when a tower is selected
+- **Tower Selection Highlight** — White ring marks the selected tower
 
-#### Technical Features
-- **Server-Authoritative Architecture** - All game logic runs on Go server (anti-cheat)
-- **60 FPS Game Loop** - Smooth server-side updates at 60 frames per second
-- **WebSocket Communication** - Real-time bidirectional updates
-- **Room-Based Multiplayer** - Infrastructure ready for multi-player games
-- **Debug System** - Toggleable panel showing tower stats, enemy health, and performance
+#### Game Flow
+- **Auto Wave Toggle** — Automatically starts the next wave after a 5s countdown
+- **"Send Now" Button** — Skip the countdown and start the wave early
+- **Wave Status Bar** — Shows wave number, phase, and enemies remaining
+- **Cursor Mode** — "None" button clears the tower preview from the cursor
+- **Game Over Screen** — Shows waves survived with a Play Again button
+
+#### Technical
+- **Server-Authoritative** — All game logic runs on the Go server
+- **60 FPS Game Loop** — Smooth server-side updates at 60 frames per second
+- **WebSocket Communication** — Real-time bidirectional state updates
+- **Canvas Ref Pattern** — Animation loop reads from refs, never stale closures
+- **Spawn Cancellation** — New Game instantly stops any running wave goroutine
+- **Debug Panel** — Toggleable panel with tower stats, enemy health, and phase info
 
 ### Tower Types
 
-| Tower    | Cost | Range | Damage | Fire Rate | Speed  | Best For               |
-|----------|------|-------|--------|-----------|--------|------------------------|
-| 🗼 Basic  | $50  | 3.0   | 15     | 1.0/sec   | 8.0    | All-around defense     |
-| 🎯 Sniper | $100 | 6.0   | 50     | 0.5/sec   | 12.0   | Long-range, high damage|
-| 💥 Splash | $75  | 2.5   | 10     | 1.5/sec   | 8.0    | Fast firing            |
-| ❄️ Slow   | $60  | 3.5   | 8      | 0.8/sec   | 8.0    | Consistent damage      |
+| Tower    | Cost | Range | Damage | Fire Rate | Best For               |
+|----------|------|-------|--------|-----------|------------------------|
+| 🗼 Basic  | $50  | 3.0   | 15     | 1.0/sec   | All-around defense     |
+| 🎯 Sniper | $100 | 6.0   | 50     | 0.5/sec   | Long-range, high damage|
+| 💥 Splash | $75  | 2.5   | 10     | 1.5/sec   | Fast firing            |
+| ❄️ Slow   | $60  | 3.5   | 8      | 0.8/sec   | Consistent damage      |
 
-### Enemy Types (Currently)
+### Enemy Types
 
-| Type     | Health | Speed | Gold | Description            |
-|----------|--------|-------|------|------------------------|
-| 🦀 Basic  | 100    | 2.0   | +10  | Standard enemy         |
+| Type    | Health | Speed | Gold | Appears  |
+|---------|--------|-------|------|----------|
+| 🦀 Basic | 100    | 2.0   | +10  | Wave 1+  |
+| 💨 Fast  | 50     | 4.0   | +8   | Wave 4+  |
+| 🛡️ Tank  | 300    | 1.0   | +25  | Wave 7+  |
+| 💀 Boss  | 1000   | 0.5   | +100 | Wave 11+ |
 
-*(More enemy types planned for future phases)*
+### Wave Progression
 
-### 🚧 In Development
-- Wave system (spawn multiple enemies automatically)
-- Additional enemy types (fast, tank, flying, boss)
-- Tower upgrades (3 levels per tower)
-- Victory/defeat screens
-- Sound effects and music
+| Waves | Enemy Mix |
+|-------|-----------|
+| 1–3   | Basic only (5–9 enemies) |
+| 4–6   | Basic + Fast |
+| 7–10  | Basic + Fast + Tank |
+| 11+   | Full mix + Boss every 5th wave, scaling counts |
+
+### 🚧 Coming Next
+- Difficulty & economy balancing
+- Score system
+- Tower upgrades (levels 1-3)
+- Enemy glossary & wave preview
+- Sound effects
 
 ## 🏗️ Architecture
 
 ### Server-Authoritative Design
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     CLIENT (React)                          │
-│  - Renders game state                                       │
-│  - Sends user inputs                                        │
-│  - 60 FPS animation loop                                    │
-│  - NO game logic                                            │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ WebSocket (60 msgs/sec)
-                       │
-┌──────────────────────▼──────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────────┐
+│                     CLIENT (React)                           │
+│  - Renders game state from refs (no stale closures)          │
+│  - Sends user inputs via WebSocket                           │
+│  - 60 FPS animation loop                                     │
+│  - NO game logic                                             │
+└──────────────────────────┬───────────────────────────────────┘
+                           │ WebSocket (60 msgs/sec)
+┌──────────────────────────▼───────────────────────────────────┐
 │                     SERVER (Go)                              │
-│  - 60 FPS game loop                                         │
-│  - Tower targeting & shooting                               │
-│  - Projectile physics                                       │
-│  - Enemy movement                                           │
-│  - BFS pathfinding                                          │
-│  - Damage calculations                                      │
-│  - Authoritative state                                      │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Data Flow
-```
-Player clicks → Client sends "place_tower" → Server validates → 
-Server adds tower → Server recalculates enemy paths → 
-Server broadcasts new state → Client renders
+│  - 60 FPS game loop                                          │
+│  - Tower targeting, shooting, selling                        │
+│  - Projectile physics & collision                            │
+│  - Enemy movement & BFS pathfinding                          │
+│  - Wave spawner goroutine (cancellable)                      │
+│  - Authoritative state                                       │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ## 🚀 Getting Started
@@ -96,13 +108,12 @@ Server broadcasts new state → Client renders
 ### Prerequisites
 - **Go** (1.21+): https://go.dev/dl/
 - **Node.js** (18+): https://nodejs.org
-- **PostgreSQL** (16+): https://postgresql.org *(optional for persistence)*
 
 ### Quick Start
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/jdizzle18/rust-rush.git
+git clone https://github.com/jaime-builds/rust-rush.git
 cd rust-rush
 ```
 
@@ -110,11 +121,11 @@ cd rust-rush
 ```bash
 cd server
 go mod download
-go run cmd/main.go
+go run main.go
 ```
 Server starts on `http://localhost:8080`
 
-3. **Start the React client** (in a new terminal)
+3. **Start the React client** (new terminal)
 ```bash
 cd client
 npm install
@@ -122,232 +133,130 @@ npm run dev
 ```
 Client starts on `http://localhost:5173`
 
-4. **Play the game!**
-Open http://localhost:5173 in your browser
+4. **Open your browser** at http://localhost:5173
 
 ## 🎯 How to Play
 
-### Basic Controls
-1. **Select a Tower** - Click one of the 4 tower buttons at the top
-2. **Place Tower** - Click on the grid to place (costs gold)
-3. **Spawn Enemy** - Click "🦀 Spawn Test Enemy" button
-4. **Watch the Action** - Towers automatically shoot enemies in range!
+1. **Place towers** — Select a tower type and click the grid
+2. **Start Wave** — Click Start Wave or enable Auto Wave
+3. **Earn gold** — Kill enemies to earn gold for more towers
+4. **Sell towers** — Click a tower to select it, then sell to reorganize
+5. **Survive** — Don't let enemies reach G or your health hits 0
 
-### Advanced Tactics
-- **Create Mazes** - Force enemies to take longer paths
-- **Cover Choke Points** - Place towers where paths converge
-- **Block Completely** - Surround enemies to trap them
-- **Use Debug Mode** - Click "🐛 Show Debug" to see tower stats
-
-### Game Mechanics
-- **Towers** rotate to face their targets in real-time
-- **Projectiles** travel toward enemies (not instant hit)
-- **Enemies** die when health reaches 0
-- **Gold** increases by +10 for each kill
-- **Health** decreases by -10 when enemies reach goal
-- **Paths** recalculate instantly when towers are placed
+### Tips
+- Block the path to force enemies on longer routes
+- Snipers cover the whole board — place them early
+- Sell and reorganize between waves
+- Boss enemies appear every 5th wave after wave 10
 
 ## 🛠️ Tech Stack
 
 ### Frontend
-- **React 18** with TypeScript
-- **HTML5 Canvas** for game rendering
-- **WebSocket** for real-time communication
-- **Vite** for blazing-fast development
-- **CSS3** for UI styling
+- React 18 with TypeScript
+- HTML5 Canvas for rendering
+- WebSocket for real-time communication
+- Vite for development
 
 ### Backend
-- **Go 1.21+** for game server
-- **Gorilla WebSocket** for real-time connections
-- **Server-side game loop** at 60 FPS
-- **Room-based architecture** for multiplayer support
+- Go 1.21+ for game server
+- Gorilla WebSocket
+- Server-side 60 FPS game loop
+- Room-based architecture
 
 ### Algorithms
-- **BFS Pathfinding** - Breadth-first search for optimal paths
-- **Manhattan Distance** - Heuristic for pathfinding
-- **Delta-time Movement** - Frame-rate independent physics
-- **Collision Detection** - Circle-based hit detection
-
-### Database (Optional)
-- **PostgreSQL** for game state persistence
-- User accounts (future feature)
-- Leaderboards (future feature)
+- BFS Pathfinding
+- Delta-time movement (frame-rate independent)
+- Circle-based collision detection
+- Spawn cancellation via Go channels
 
 ## 📂 Project Structure
 ```
 rust-rush/
-├── server/                    # Go backend
-│   ├── cmd/
-│   │   └── main.go           # Server entry point
+├── server/
+│   ├── main.go
 │   └── internal/
 │       ├── game/
-│       │   ├── state.go      # Game state with shooting mechanics
-│       │   └── manager.go    # Game loop & room management
+│       │   ├── state.go      # Game state, towers, enemies, wave config
+│       │   └── manager.go    # Game loop, wave spawner
 │       └── websocket/
 │           ├── hub.go        # WebSocket broadcast hub
-│           └── client.go     # Client connection handler
-├── client/                    # React frontend
-│   ├── src/
-│   │   ├── App.tsx           # Main app with debug panel
-│   │   ├── game/
-│   │   │   └── GameCanvas.tsx # Canvas rendering engine
-│   │   ├── hooks/
-│   │   │   └── useWebSocket.ts # WebSocket custom hook
-│   │   └── types/
-│   │       └── game.ts       # TypeScript type definitions
-│   └── package.json
-├── database/                  # PostgreSQL schemas (optional)
-│   └── schema.sql
+│           └── client.go     # Client connection & message handlers
+├── client/
+│   └── src/
+│       ├── App.tsx
+│       ├── game/
+│       │   └── GameCanvas.tsx
+│       ├── hooks/
+│       │   └── useWebSocket.ts
+│       └── types/
+│           └── game.ts
 └── docs/
-    ├── TODO.md               # Development roadmap
-    └── ARCHITECTURE.md       # System design docs
-```
-
-## 🎮 Gameplay Screenshots
-
-### Main Game
-```
-┌────────────────────────────────────────────────────┐
-│  🦀 Rust Rush - Tower Defense                      │
-│  ● Connected    🐛 Show Debug                      │
-├────────────────────────────────────────────────────┤
-│  💰 Gold: 250   ❤️ Health: 90   🌊 Wave: 1         │
-│  🔌 Server: Connected                              │
-├────────────────────────────────────────────────────┤
-│  🗼 Basic $50  🎯 Sniper $100  💥 Splash $75       │
-│  ❄️ Slow $60                                       │
-├────────────────────────────────────────────────────┤
-│                                                    │
-│         [Grid with towers shooting enemies]       │
-│                                                    │
-│  S ──→ ──→ 🗼 ──→ 🦀💥──→ 🎯 ──→ ──→ G           │
-│                   ↑                                │
-│                  💥 Explosion!                     │
-│                                                    │
-├────────────────────────────────────────────────────┤
-│  [Start Wave] [🦀 Spawn Test Enemy] [Clear All]   │
-├────────────────────────────────────────────────────┤
-│  Towers: 3 | Enemies: 2 | Projectiles: 5          │
-│  💡 Towers will automatically shoot enemies!       │
-└────────────────────────────────────────────────────┘
-```
-
-### Debug Mode (Optional)
-```
-┌─────────────────────────────────────────────────────┐
-│ 📊 Game State     🗼 Towers (3)      🦀 Enemies (2) │
-│ 🗼 Towers: 3      #1 basic          #1: 85/100     │
-│ 🦀 Enemies: 2     Rot: 1.57         #2: 100/100    │
-│ 💥 Projectiles: 5 CD: 0.45                         │
-│ 💰 Gold: 250      Target: 2                        │
-│ ❤️ Health: 90     #2 sniper                        │
-│                   Rot: -0.78                       │
-│                   CD: 1.23                         │
-│                   Target: None                     │
-└─────────────────────────────────────────────────────┘
+    └── TODO.md
 ```
 
 ## 🧪 Testing
 
-### Server Tests
+### Start the server
 ```bash
-cd server
-go test ./...
+cd server && go run main.go
 ```
 
 ### Manual Testing Checklist
 - [x] Place all 4 tower types
-- [x] Spawn multiple enemies
-- [x] Towers rotate to face enemies
-- [x] Projectiles fly toward targets
-- [x] Enemies take damage and die
-- [x] Dead enemies disappear immediately
-- [x] Gold increases on kills
+- [x] Gold deducts on placement, blocks if insufficient
+- [x] Click tower to select, view stats, sell for refund
+- [x] Start Wave spawns enemies with delays
+- [x] Wave counter increments on completion
+- [x] Auto Wave countdown and Send Now button
+- [x] Enemies reroute when towers placed mid-wave
+- [x] Block path completely — enemies skip, wave still completes
 - [x] Health decreases when enemies reach goal
-- [x] Place tower mid-wave (enemies reroute)
-- [x] Block path completely (enemies stop)
-- [x] All towers shoot (not just first one)
-- [x] Debug panel toggles on/off
-- [x] Connection status shows green when connected
+- [x] Game Over screen appears at 0 health
+- [x] New Game resets everything in one click
+- [x] New Game mid-wave cancels spawn goroutine
 
-## 🐛 Known Issues & Limitations
+## 🐛 Known Issues
 
-### Current Limitations
-- Only one enemy type (basic)
-- No wave system yet (manual spawn only)
-- No tower selling/upgrading
-- No sound effects
-- Single-player only (multiplayer infrastructure ready but not implemented)
-
-### Performance
-- Tested with 20+ towers, 10+ enemies at 60 FPS ✅
-- WebSocket sends ~60 messages/second (may need optimization for large games)
-- BFS pathfinding runs when tower placed (instant for 20×15 grid)
+- Difficulty scaling plateaus — experienced players can reach wave 50+ without losing
+- Gold accumulates faster than it can be spent at higher waves
+- Tower sell/upgrade UI could be more polished
 
 ## 🚀 Future Plans
 
-### Short Term (Next 2-4 Weeks)
-- [ ] Wave system (automatic enemy spawning)
-- [ ] Multiple enemy types (fast, tank, flying, boss)
-- [ ] Tower upgrades (levels 1-3)
-- [ ] Better UI/UX polish
-- [ ] Sound effects
+### Short Term
+- Difficulty & economy rebalancing
+- Score system (points per kill + wave bonuses)
+- Tower upgrades (levels 1-3)
+- Enemy glossary and wave preview panel
 
-### Medium Term (1-2 Months)
-- [ ] Multiplayer lobby system
-- [ ] User accounts & authentication
-- [ ] Leaderboards
-- [ ] More tower types (freeze, tesla, mortar)
-- [ ] Map variety
+### Medium Term
+- Sound effects and background music
+- Visual polish (animations, background theme)
+- High score leaderboard
+- Speed controls (1x, 2x, 3x)
 
-### Long Term (3+ Months)
-- [ ] Mobile version (React Native)
-- [ ] Achievements system
-- [ ] Tutorial/campaign mode
-- [ ] Map editor
-- [ ] Steam release consideration
-
-## 🤝 Contributing
-
-This is a personal learning project, but feedback and suggestions are welcome! Feel free to:
-- Open issues for bugs
-- Suggest features
-- Ask questions about the architecture
-- Share your high scores!
-
-## 📝 Development Notes
-
-### What I Learned
-- **Server-authoritative architecture** prevents cheating but requires careful state management
-- **60 FPS game loops** need efficient algorithms to avoid lag
-- **WebSocket broadcasting** at high frequency requires optimization
-- **Real-time pathfinding** during gameplay is possible with BFS on small grids
-- **React + Canvas** works great for game rendering with proper state management
-
-### Technical Challenges Solved
-1. **Syncing client/server state** - Server is authoritative, client just renders
-2. **Smooth enemy movement** - Server controls position, client interpolates
-3. **Tower rotation** - Server calculates angle using atan2, client renders
-4. **Dynamic pathfinding** - BFS runs when tower placed, all enemies reroute
-5. **Projectile physics** - Server moves projectiles, checks collision, broadcasts
+### Long Term
+- Multiplayer lobby
+- User accounts
+- Map editor
+- Mobile version
 
 ## 📜 License
 
-MIT License - See LICENSE file for details
+MIT License
 
 ## 🙏 Acknowledgments
 
-- **Gorilla WebSocket** - Excellent Go WebSocket library
-- **React + Vite** - Amazing developer experience
-- **BFS Algorithm** - Simple and effective pathfinding
-- **Tower Defense Genre** - Inspired by classics like Bloons TD and Kingdom Rush
+- Gorilla WebSocket
+- React + Vite
+- Inspired by Bloons TD and Kingdom Rush
 
 ## 📧 Contact
 
 **Jaime De La Paz**
 - GitHub: [@jaime-builds](https://github.com/jaime-builds)
-- Project Link: [https://github.com/jaime-builds/movie-analytics-dashboard](https://github.com/jaime-builds/rust-rush)
+- Project: [https://github.com/jaime-builds/rust-rush](https://github.com/jaime-builds/rust-rush)
 
 ---
 
-**Built with** 🐹 Go and ⚛️ React | **Status**: MVP Complete! 🎉 | **Last Updated**: February 5, 2026
+**Built with** 🐹 Go and ⚛️ React | **Status**: Alpha Complete! 🎉 | **Last Updated**: April 21, 2026

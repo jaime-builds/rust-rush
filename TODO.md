@@ -3,26 +3,22 @@
 ## ✅ Completed
 
 ### Phase 1: Project Setup
-- [x] Initialize Rust game engine project
+- [x] Initialize project structure
 - [x] Set up Go WebSocket server
 - [x] Create React + TypeScript frontend
 - [x] Configure PostgreSQL database
-- [x] Set up project structure
 - [x] Create development environment docs
 
 ### Phase 2: A* Pathfinding
-- [x] Implement A* algorithm in Rust
-- [x] Add Manhattan distance heuristic
+- [x] Implement BFS pathfinding in Go
 - [x] Path reconstruction
-- [x] Waypoint simplification
-- [x] Unit tests (10 passing)
 - [x] Integration with Enemy struct
 - [x] Auto-recalculation on tower placement
 
 ### Phase 3: WebSocket Communication
 - [x] Create useWebSocket custom hook
 - [x] Auto-reconnect with exponential backoff
-- [x] Message type system (place_tower, start_wave, etc.)
+- [x] Message type system
 - [x] Connection status display
 - [x] Go server message handlers
 - [x] Room-based multiplayer support
@@ -33,7 +29,6 @@
 - [x] Range preview on hover
 - [x] Prevent double placement
 - [x] Tower costs displayed
-- [x] Clear towers functionality
 - [x] TypeScript type definitions
 
 ### Phase 5: Enemy Animation
@@ -41,115 +36,111 @@
 - [x] Smooth enemy movement along paths
 - [x] Enemy rendering with health bars
 - [x] Spawn (S) and Goal (G) markers
-- [x] Multiple enemy support
 - [x] Delta-time based movement
-- [x] Pause/resume functionality
 
 ### Phase 6: Dynamic Pathfinding
 - [x] BFS pathfinding implementation
 - [x] Enemies avoid towers
 - [x] Path recalculation when towers placed
-- [x] Smooth path transitions (no backtracking)
-- [x] Find closest waypoint on new path
+- [x] Smooth path transitions
 - [x] Path blocking detection
-- [x] Alert when spawn is blocked
 - [x] Trapped enemies stop moving
 
-### Phase 7: Tower Shooting Mechanics ✅ **NEW!**
+### Phase 7: Tower Shooting Mechanics
 - [x] Server-side game loop at 60 FPS
 - [x] Detect enemies in tower range
 - [x] Tower rotation toward target (real-time)
 - [x] Projectile creation and movement
 - [x] Projectile rendering with trails
-- [x] Hit detection (0.3 unit radius)
-- [x] Muzzle flash effects (100ms duration)
+- [x] Hit detection
+- [x] Muzzle flash effects
 - [x] Fire rate cooldown system
 - [x] Different tower stats per type
 - [x] Server-authoritative architecture
-- [x] Real-time state broadcasting
 
-### Phase 8: Damage System ✅ **NEW!**
+### Phase 8: Damage System
 - [x] Apply damage to enemies on hit
 - [x] Health reduction (real-time sync)
 - [x] Enemy death detection
-- [x] Explosion effects on hit (300ms animation)
+- [x] Explosion effects on hit
 - [x] Remove dead enemies from game
-- [x] Award gold for kills (+10 per enemy)
-- [x] Gold counter updates
+- [x] Award gold for kills (scaled by enemy type)
 - [x] Visual feedback for damage (health bars)
 
-### Phase 9: Server-Side Enemy Movement ✅ **NEW!**
+### Phase 9: Server-Side Enemy Movement
 - [x] Enemy movement handled by server
 - [x] Path following with waypoint progression
-- [x] Server-side speed calculations
 - [x] Health deduction when enemies reach goal (-10)
 - [x] Client renders server state only
 - [x] Smooth 60 FPS movement
-- [x] Synchronized position updates
 
-### Phase 10: Real-Time Pathfinding ✅ **NEW!**
+### Phase 10: Real-Time Pathfinding
 - [x] Server-side BFS pathfinding
 - [x] Dynamic path recalculation on tower placement
 - [x] All enemies reroute simultaneously
-- [x] Trapped enemy detection (no path found)
-- [x] Instant path updates (no delay)
+- [x] Trapped enemy detection
 - [x] Works during active waves
-- [x] Performance optimized for 20×15 grid
+
+### Phase 11: Wave System ✅ **NEW!**
+- [x] Wave configuration with enemy progression
+- [x] Start Wave button functional
+- [x] Multiple enemy types per wave (basic, fast, tank, boss)
+- [x] Configurable spawn delays (decrease with wave number)
+- [x] Wave counter increments on completion
+- [x] Wave completion detection (no enemies + none remaining)
+- [x] Auto Wave toggle with 5s countdown
+- [x] "Send Now" button to skip countdown
+- [x] Start Wave disabled during active wave
+- [x] Gold deduction on tower placement
+- [x] Insufficient funds blocks placement
+- [x] Tower buttons show affordability
+- [x] Tower sell system (click to select, 70% refund)
+- [x] Tower info panel (range, damage, fire rate)
+- [x] Cursor/None mode to deselect tower type
+- [x] Game Over screen with Play Again button
+- [x] New Game resets cleanly in one click
+- [x] New Game cancels active spawn goroutine
+- [x] Fix frozen explosion sprites on wave end
+- [x] Fix frozen projectile sprites on wave end
+- [x] Fix wave freeze when path fully blocked
+- [x] Canvas uses refs for stale-closure-free rendering
 
 ---
 
-## 🚧 In Progress
+## 🚧 In Progress / Next Up
 
-### Phase 11: Wave System
-- [ ] Wave configuration (enemy count, types)
-- [ ] "Start Wave" button functionality
-- [ ] Spawn multiple enemies per wave
-- [ ] Time delay between spawns
-- [ ] Wave difficulty scaling
-- [ ] Wave counter display
-- [ ] Countdown timer between waves
-- [ ] Wave completion detection
+### Phase 12: Difficulty & Economy Balancing
+- [ ] Enemy health scales more aggressively past wave 10
+- [ ] Enemy count ramp adjusted (currently too easy)
+- [ ] Gold rewards reviewed (players accumulate too fast)
+- [ ] Boss enemies appear more frequently at high waves
+- [ ] Spawn delay floors lowered for higher waves
+- [ ] Playtesting targets: game over by wave 20-30 without good strategy
+
+### Phase 13: Tower Sell & Upgrades
+- [x] Sell tower (70% refund) ✅
+- [ ] Tower upgrade system (levels 1-3)
+- [ ] Increased damage/range per level
+- [ ] Visual indicator for tower level
+- [ ] Upgrade cost scaling
+- [ ] Upgrade UI in tower info panel
+
+### Phase 14: Health & Scoring
+- [x] Health reduction when enemy reaches goal ✅
+- [x] Game over screen ✅
+- [ ] Score system (points per kill, scaled by enemy type and wave)
+- [ ] Wave completion bonus (full health = multiplier)
+- [ ] Score display during game and on game over screen
+- [ ] High score tracking (local)
+
+### Phase 15: Enemy Glossary & Wave Preview
+- [ ] Enemy stat sheet (type, HP, speed, gold reward)
+- [ ] Wave preview panel showing upcoming enemy composition
+- [ ] Enemy visual legend (color → type mapping)
 
 ---
 
 ## 📋 Planned Features
-
-### Phase 12: Resource Management
-- [x] Gold system implementation (basic)
-- [ ] Deduct gold when placing towers
-- [ ] Insufficient funds detection
-- [ ] Disable tower buttons when can't afford
-- [ ] Starting gold configuration
-- [ ] Gold rewards per enemy type
-- [ ] Visual gold animations (+10, +25, etc.)
-
-### Phase 13: Health & Game Over
-- [x] Health reduction when enemy reaches goal
-- [x] Health display updates
-- [ ] Game over screen (0 health)
-- [ ] Victory screen (all waves completed)
-- [ ] Restart button
-- [ ] Final score calculation
-- [ ] Stats display (enemies killed, gold earned)
-
-### Phase 14: Tower Upgrades
-- [ ] Click tower to show upgrade menu
-- [ ] Upgrade level system (1-3)
-- [ ] Increased damage per level
-- [ ] Increased range per level
-- [ ] Visual changes per level
-- [ ] Upgrade costs
-- [ ] Sell tower option
-- [ ] Refund calculation (70% of cost)
-
-### Phase 15: More Enemy Types
-- [ ] Fast enemies (low health, high speed)
-- [ ] Tank enemies (high health, slow)
-- [ ] Flying enemies (ignore ground towers)
-- [ ] Boss enemies (end of wave)
-- [ ] Different enemy colors/sizes
-- [ ] Different gold rewards
-- [ ] Special abilities (shield, teleport)
 
 ### Phase 16: Special Towers
 - [ ] Freeze tower (slows enemies)
@@ -171,16 +162,12 @@
 - [ ] Tower placement animations
 - [ ] Particle effects for hits
 - [ ] Enemy spawn animation
-- [ ] Explosion effects (splash tower)
 - [ ] Screen shake on damage
-- [ ] Smooth camera pan
 - [ ] Background theme (grass, path)
+- [ ] Enemy type visual improvements
 
 ### Phase 19: UI Improvements
 - [ ] Mini-map
-- [ ] Tower stats tooltip
-- [ ] Enemy info tooltip
-- [ ] Upgrade preview
 - [ ] Hotkeys for tower selection (1-4)
 - [ ] Speed controls (1x, 2x, 3x)
 - [ ] Settings menu
@@ -188,30 +175,21 @@
 
 ### Phase 20: Multiplayer Features
 - [ ] Lobby system
-- [ ] Player list
 - [ ] Cooperative mode (shared resources)
-- [ ] Competitive mode (race to survive)
-- [ ] Spectator mode
+- [ ] Competitive mode
 - [ ] Chat system
-- [ ] Player ready system
 
 ### Phase 21: Persistence & Progression
 - [ ] User accounts
 - [ ] High score leaderboard
 - [ ] Achievements system
-- [ ] Unlockable towers
-- [ ] Player stats tracking
 - [ ] Save/load game state
-- [ ] Daily challenges
 
 ### Phase 22: Advanced Features
 - [ ] Map editor
 - [ ] Custom maps
 - [ ] Different game modes (endless, timed)
 - [ ] Difficulty settings
-- [ ] Random events (meteor, supply drop)
-- [ ] Tower combinations (synergies)
-- [ ] Enemy pathfinding AI improvements
 
 ---
 
@@ -223,127 +201,107 @@
 - [x] ~~Clear button not clearing enemies~~ (Fixed - clear_all message)
 - [x] ~~Towers not rotating~~ (Fixed - server calculates rotation)
 - [x] ~~Dead enemies not disappearing~~ (Fixed - server removes on death)
-- [x] ~~Enemies not moving~~ (Fixed - server-side movement)
-- [x] ~~Towers shooting out of range~~ (Fixed - proper range check)
 - [x] ~~Only first tower shooting~~ (Fixed - all towers update)
 - [x] ~~Enemies not re-pathing mid-wave~~ (Fixed - dynamic recalculation)
+- [x] ~~Gold not deducting on tower placement~~ (Fixed - Phase 11)
+- [x] ~~Frozen explosion/projectile sprites after wave~~ (Fixed - Phase 11)
+- [x] ~~Wave freezes when path blocked~~ (Fixed - skip blocked spawns)
+- [x] ~~Wave carries over after New Game~~ (Fixed - cancel channel)
+- [x] ~~New Game required two clicks~~ (Fixed - client resets immediately)
+- [x] ~~Stale enemy rendering after wave clear~~ (Fixed - canvas ref pattern)
 
 ---
 
 ## 🔧 Technical Debt
 
 - [ ] Optimize pathfinding for large grids
-- [ ] Reduce WebSocket message size (currently ~60 messages/sec)
+- [ ] Reduce WebSocket message size
 - [ ] Add error boundaries in React
-- [ ] Implement request/response pattern (not just broadcast)
 - [ ] Add server-side validation for tower placement
 - [ ] Rate limiting for actions
 - [ ] Connection recovery on network loss
 - [ ] State synchronization on reconnect
-- [ ] Memory leak detection in animation loop
-
----
-
-## 📚 Documentation Needed
-
-- [x] Architecture diagrams (in README)
-- [ ] API documentation
-- [ ] Deployment guide
-- [ ] Contribution guidelines
-- [ ] Code comments for complex algorithms
-- [ ] Video tutorial/demo
 
 ---
 
 ## 🎯 Milestone Goals
 
-### MVP (Minimum Viable Product) ✅ **COMPLETE!**
-- [x] Tower placement
-- [x] Enemy pathfinding
-- [x] Canvas rendering
-- [x] Tower shooting
-- [x] Enemy damage/death
-- [x] Gold/health management
-- [x] Win/lose conditions (basic)
+### MVP ✅ COMPLETE
+- [x] Tower placement, pathfinding, rendering, shooting, damage, gold/health
 
-### Alpha Release (Next Target)
-- [x] All MVP features ✅
-- [x] 4 tower types working ✅
-- [ ] 3-4 enemy types (currently only basic)
-- [ ] Wave system (10 waves)
-- [ ] Sound effects
-- [ ] Basic UI polish
+### Alpha Release ✅ COMPLETE
+- [x] 4 tower types
+- [x] Wave system with multiple enemy types
+- [x] Tower sell
+- [x] Game over / new game flow
+- [x] Auto wave
 
-### Beta Release
-- [ ] Multiplayer lobby
-- [ ] User accounts
-- [ ] Leaderboards
-- [ ] 6+ tower types
-- [ ] 6+ enemy types
+### Beta Release (Next Target)
+- [ ] Difficulty balancing
+- [ ] Score system
 - [ ] Tower upgrades
-- [ ] Multiple maps
+- [ ] Sound effects
+- [ ] Enemy glossary / wave preview
+- [ ] High score tracking
 
 ### Full Release
-- [ ] All planned features
-- [ ] Full multiplayer support
+- [ ] Multiplayer
+- [ ] User accounts
+- [ ] Leaderboards
 - [ ] Achievements
 - [ ] Mobile responsive
 - [ ] Tutorial
-- [ ] Marketing site
 
 ---
 
-## 💡 Ideas for Future
+## 💡 Ideas Parking Lot
 
 - Mobile app (React Native?)
 - Steam release
 - Mod support
 - Level editor
 - Seasonal events
-- Esports tournaments
-- Twitch integration
 - Speed run mode
 - Challenge maps
-- Community workshops
 
 ---
 
-## 🎉 Recent Achievements (Feb 5, 2026)
+## 🎉 Recent Achievements (April 21, 2026)
 
-### Major Features Implemented
-1. **Complete Tower Shooting System**
-   - 60 FPS server-side game loop
-   - Automatic target acquisition
-   - Smooth tower rotation
-   - Projectile physics with trails
-   - Muzzle flash and explosion effects
-   
-2. **Server-Authoritative Architecture**
-   - All game logic runs on server
-   - Client is pure renderer
-   - No client-side cheating possible
-   - Real-time state synchronization
+### Phase 11 — Wave System & Core Gameplay Loop
 
-3. **Dynamic Pathfinding**
-   - Enemies reroute instantly when towers placed
-   - BFS pathfinding on server
-   - Works during active gameplay
-   - Trapped enemy detection
+1. **Wave System**
+   - Enemy progression: basics (1-3) → fast (4-6) → tanks (7-10) → boss (11+)
+   - Configurable spawn delays that decrease with wave number
+   - Wave completion detection and counter
+   - Auto Wave toggle with 5s countdown and "Send Now" shortcut
 
-4. **Debug System**
-   - Toggleable debug panel
-   - Real-time tower stats
-   - Enemy health monitoring
-   - FPS and performance metrics
+2. **Economy**
+   - Gold deducts on tower placement
+   - Gold rewards scaled by enemy type
+   - Tower sell at 70% refund with info panel
 
-### Performance Stats
-- 60 FPS server game loop ✅
-- 60 FPS client rendering ✅
-- ~60 WebSocket messages/second
-- Handles 10+ enemies smoothly
-- Handles 20+ towers without lag
+3. **Game Flow**
+   - Game Over screen with Play Again
+   - New Game resets server and client instantly
+   - New Game cancels active wave spawn goroutine cleanly
+
+4. **Bug Fixes**
+   - Frozen explosion/projectile sprites after wave end
+   - Wave freeze on blocked path
+   - Stale canvas rendering via ref pattern
+
+### Performance (Wave 55 stress test)
+- 60 FPS maintained ✅
+- 100+ towers without lag ✅
+- 18+ simultaneous enemies ✅
+- Stable across 55+ waves ✅
+
+### Known Issues to Address Next
+- Difficulty does not scale aggressively enough — players can reach wave 55+ with $67k gold
+- Economy needs rebalancing (gold accumulates faster than it can be spent)
 
 ---
 
-**Last Updated**: February 5, 2026  
-**Status**: Phase 10 Complete ✅ | MVP Achieved! 🎉 | Moving to Phase 11 (Wave System) 🚧
+**Last Updated**: April 21, 2026
+**Status**: Phase 11 Complete ✅ | Alpha Complete! 🎉 | Moving to Phase 12 (Difficulty & Economy Balancing) 🚧
