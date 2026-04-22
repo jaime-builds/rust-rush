@@ -152,18 +152,25 @@
 - [ ] Wave preview panel showing upcoming enemy composition
 - [ ] Enemy visual legend (color → type mapping)
 
+### Phase 16: Local Production Build
+- [ ] Build React app to static files (`npm run build`)
+- [ ] Go server serves static files from `client/dist`
+- [ ] Single binary, single port (8080), no Vite dev server needed
+- [ ] One terminal to run the whole game locally
+- [ ] Update README with production run instructions
+
 ---
 
 ## 📋 Planned Features
 
-### Phase 16: Special Towers
+### Phase 17: Special Towers
 - [ ] Freeze tower (slows enemies)
 - [ ] Tesla tower (chain lightning)
 - [ ] Mortar tower (long range AOE)
 - [ ] Laser tower (continuous beam)
 - [ ] Support tower (buff nearby towers)
 
-### Phase 17: Sound & Music
+### Phase 18: Sound & Music
 - [ ] Background music
 - [ ] Tower placement sound
 - [ ] Tower shooting sounds
@@ -172,7 +179,7 @@
 - [ ] UI click sounds
 - [ ] Mute/volume controls
 
-### Phase 18: Visual Polish
+### Phase 19: Visual Polish
 - [ ] Tower placement animations
 - [ ] Particle effects for hits
 - [ ] Enemy spawn animation
@@ -180,26 +187,35 @@
 - [ ] Background theme (grass, path)
 - [ ] Enemy type visual improvements
 
-### Phase 19: UI Improvements
+### Phase 20: UI Improvements
 - [ ] Mini-map
 - [ ] Hotkeys for tower selection (1-4)
 - [ ] Speed controls (1x, 2x, 3x)
 - [ ] Settings menu
 - [ ] Tutorial/help screen
 
-### Phase 20: Multiplayer Features
+### Phase 21: Public Deployment
+- [ ] Choose hosting platform (Railway, Render, or Fly.io — all have free tiers)
+- [ ] Dockerize the Go server
+- [ ] Configure environment variables (port, CORS origin)
+- [ ] Update WebSocket URL to production endpoint
+- [ ] Deploy and verify WebSocket connections work in production
+- [ ] Custom domain (optional)
+- [ ] Share public link
+
+### Phase 22: Multiplayer Features
 - [ ] Lobby system
 - [ ] Cooperative mode (shared resources)
 - [ ] Competitive mode
 - [ ] Chat system
 
-### Phase 21: Persistence & Progression
+### Phase 23: Persistence & Progression
 - [ ] User accounts
 - [ ] High score leaderboard
 - [ ] Achievements system
 - [ ] Save/load game state
 
-### Phase 22: Advanced Features
+### Phase 24: Advanced Features
 - [ ] Map editor
 - [ ] Custom maps
 - [ ] Different game modes (endless, timed)
@@ -251,14 +267,15 @@
 - [x] Auto wave
 
 ### Beta Release (Next Target)
-- [ ] Difficulty balancing
 - [ ] Score system
-- [ ] Tower upgrades
+- [ ] Tower upgrades ✅
 - [ ] Sound effects
 - [ ] Enemy glossary / wave preview
 - [ ] High score tracking
+- [ ] Local production build (one terminal)
 
 ### Full Release
+- [ ] Public deployment (shareable link)
 - [ ] Multiplayer
 - [ ] User accounts
 - [ ] Leaderboards
