@@ -56,22 +56,59 @@ func GetWaveConfig(wave int) WaveConfig {
 			{EnemyType: "tank", Count: tankCount, SpawnDelay: delay * 1.5},
 		}}
 	default:
-		extra := wave - 11
-		basicCount := 10 + extra*2
-		fastCount := 4 + extra
-		tankCount := 2 + extra/2
-		bossCount := wave / 5
-		delay := math.Max(0.8-float64(extra)*0.05, 0.4)
+		// Past wave 10: counts grow faster using a quadratic bump on top of linear.
+		extra := wave - 10
+
+		basicCount := 10 + extra*2 + (extra*extra)/8
+		fastCount := 3 + extra + (extra*extra)/12
+		tankCount := 1 + extra/2 + (extra*extra)/20
+
+		// Boss every 3rd wave from wave 11 onward (was every 5th), capped at 6
+		bossCount := 0
+		if wave >= 11 {
+			bossCount = 1 + (wave-11)/3
+			if bossCount > 6 {
+				bossCount = 6
+			}
+		}
+
+		// Spawn delay floors at 0.25s (was 0.4s)
+		delay := math.Max(1.0-float64(extra)*0.04, 0.25)
+
 		enemies := []WaveEnemy{
 			{EnemyType: "basic", Count: basicCount, SpawnDelay: delay},
 			{EnemyType: "fast", Count: fastCount, SpawnDelay: delay * 0.6},
-			{EnemyType: "tank", Count: tankCount, SpawnDelay: delay * 1.5},
+			{EnemyType: "tank", Count: tankCount, SpawnDelay: delay * 1.4},
 		}
 		if bossCount > 0 {
-			enemies = append(enemies, WaveEnemy{EnemyType: "boss", Count: bossCount, SpawnDelay: 3.0})
+			bossDelay := math.Max(2.5-float64(extra)*0.05, 1.5)
+			enemies = append(enemies, WaveEnemy{EnemyType: "boss", Count: bossCount, SpawnDelay: bossDelay})
 		}
 		return WaveConfig{Wave: wave, Enemies: enemies}
 	}
+}
+
+// ScaledEnemyStats returns health and speed for an enemy type scaled to the current wave.
+// Base stats are unchanged so the info panel still shows correct base values.
+//
+// Health: +15% compound per wave above 1.
+// Speed:  +3% compound per wave above 5, capped at +80% of base.
+func ScaledEnemyStats(enemyType string, wave int) (health float64, speed float64) {
+	base := getEnemyStats(enemyType)
+
+	// Health scaling starts at wave 5 so early waves feel fair.
+	// +10% compound per wave above 5 (was +15% from wave 1 — too steep).
+	healthWaves := math.Max(0, float64(wave-5))
+	healthMult := math.Pow(1.10, healthWaves)
+	health = base.Health * healthMult
+
+	speedMult := 1.0
+	if wave > 5 {
+		speedMult = math.Min(math.Pow(1.03, float64(wave-5)), 1.80)
+	}
+	speed = base.Speed * speedMult
+
+	return health, speed
 }
 
 // Position represents a 2D coordinate
@@ -96,24 +133,29 @@ type Tower struct {
 
 // Enemy represents a hostile unit
 type Enemy struct {
-	ID        int        `json:"id"`
-	Position  Position   `json:"position"`
-	EnemyType string     `json:"enemy_type"`
-	Health    float64    `json:"health"`
-	MaxHealth float64    `json:"max_health"`
-	Speed     float64    `json:"speed"`
-	Path      []Position `json:"path,omitempty"`
-	PathIndex int        `json:"path_index"`
+	ID            int        `json:"id"`
+	Position      Position   `json:"position"`
+	EnemyType     string     `json:"enemy_type"`
+	Health        float64    `json:"health"`
+	MaxHealth     float64    `json:"max_health"`
+	Speed         float64    `json:"speed"`
+	SlowDuration  float64    `json:"slow_duration"`
+	SlowMultiplier float64   `json:"slow_multiplier"`
+	Path          []Position `json:"path,omitempty"`
+	PathIndex     int        `json:"path_index"`
 }
 
 // Projectile represents a bullet/missile
 type Projectile struct {
-	ID       int      `json:"id"`
-	Position Position `json:"position"`
-	TargetID int      `json:"target_id"`
-	Speed    float64  `json:"speed"`
-	Damage   float64  `json:"damage"`
-	TowerID  int      `json:"tower_id"`
+	ID        int      `json:"id"`
+	Position  Position `json:"position"`
+	TargetID  int      `json:"target_id"`
+	Speed     float64  `json:"speed"`
+	Damage    float64  `json:"damage"`
+	TowerID   int      `json:"tower_id"`
+	IsAOE     bool     `json:"is_aoe"`
+	AOERadius float64  `json:"aoe_radius"`
+	AOEDamage float64  `json:"aoe_damage"`
 }
 
 // MuzzleFlash represents a visual effect when tower shoots
@@ -283,14 +325,23 @@ func (gs *GameStateWithShooting) shootProjectile(tower *Tower, target *Enemy) {
 	if tower.TowerType == "sniper" {
 		speed = 12.0
 	}
-	gs.Projectiles = append(gs.Projectiles, Projectile{
+
+	proj := Projectile{
 		ID:       gs.nextProjectileID,
 		Position: tower.Position,
 		TargetID: target.ID,
 		Speed:    speed,
 		Damage:   tower.Damage,
 		TowerID:  tower.ID,
-	})
+	}
+
+	if tower.TowerType == "splash" {
+		proj.IsAOE = true
+		proj.AOERadius = 1.5
+		proj.AOEDamage = tower.Damage * 0.6
+	}
+
+	gs.Projectiles = append(gs.Projectiles, proj)
 	gs.nextProjectileID++
 }
 
@@ -317,12 +368,49 @@ func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
 		dist := math.Sqrt(dx*dx + dy*dy)
 
 		if dist < 0.3 {
-			target.Health -= proj.Damage
+			// Look up which tower fired this projectile to decide effect
+			var firingTowerType string
+			for _, t := range gs.Towers {
+				if t.ID == proj.TowerID {
+					firingTowerType = t.TowerType
+					break
+				}
+			}
+
+			if firingTowerType == "slow" {
+				// Slow towers apply a speed debuff; refreshes duration, does not stack.
+				target.SlowDuration = 2.0
+				target.SlowMultiplier = 0.4
+				target.Health -= proj.Damage
+			} else {
+				target.Health -= proj.Damage
+			}
+
+			// AOE splash: damage all enemies within radius, skipping the primary target
+			if proj.IsAOE {
+				for j := range gs.Enemies {
+					splashTarget := &gs.Enemies[j]
+					if splashTarget.ID == proj.TargetID {
+						continue // already took direct hit damage
+					}
+					if distance(proj.Position, splashTarget.Position) <= proj.AOERadius {
+						splashTarget.Health -= proj.AOEDamage
+					}
+				}
+			}
+
+			// Explosion visual — larger radius for AOE hits
+			explosionRadius := 0.5
+			explosionDuration := 0.3
+			if proj.IsAOE {
+				explosionRadius = proj.AOERadius
+				explosionDuration = 0.4
+			}
 			gs.Explosions = append(gs.Explosions, Explosion{
 				ID:       gs.nextEffectID,
 				Position: proj.Position,
-				Duration: 0.3,
-				Radius:   0.5,
+				Duration: explosionDuration,
+				Radius:   explosionRadius,
 			})
 			gs.nextEffectID++
 			continue
@@ -355,6 +443,18 @@ func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
 			continue
 		}
 
+		// Tick slow debuff
+		effectiveSpeed := enemy.Speed
+		if enemy.SlowDuration > 0 {
+			enemy.SlowDuration -= deltaTime
+			if enemy.SlowDuration <= 0 {
+				enemy.SlowDuration = 0
+				enemy.SlowMultiplier = 0
+			} else {
+				effectiveSpeed = enemy.Speed * enemy.SlowMultiplier
+			}
+		}
+
 		if enemy.Path != nil && len(enemy.Path) > 0 && enemy.PathIndex < len(enemy.Path) {
 			target := enemy.Path[enemy.PathIndex]
 			dx := target.X - enemy.Position.X
@@ -372,7 +472,7 @@ func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
 			}
 
 			if dist > 0 && enemy.PathIndex < len(enemy.Path) {
-				moveDistance := enemy.Speed * deltaTime
+				moveDistance := effectiveSpeed * deltaTime
 				ratio := moveDistance / dist
 				if ratio > 1.0 {
 					ratio = 1.0
@@ -471,19 +571,19 @@ func (gs *GameStateWithShooting) RemoveTower(towerID int) (int, bool) {
 	return 0, false
 }
 
-// AddEnemy adds an enemy to the game
-func (gs *GameStateWithShooting) AddEnemy(enemyType string, path []Position) Enemy {
+// AddEnemy adds an enemy to the game with stats scaled to the current wave.
+func (gs *GameStateWithShooting) AddEnemy(enemyType string, path []Position, wave int) Enemy {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
-	stats := getEnemyStats(enemyType)
+	health, speed := ScaledEnemyStats(enemyType, wave)
 	enemy := Enemy{
 		ID:        gs.nextEnemyID,
 		Position:  path[0],
 		EnemyType: enemyType,
-		Health:    stats.Health,
-		MaxHealth: stats.Health,
-		Speed:     stats.Speed,
+		Health:    health,
+		MaxHealth: health,
+		Speed:     speed,
 		Path:      path,
 		PathIndex: 0,
 	}

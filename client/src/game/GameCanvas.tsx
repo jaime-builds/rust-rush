@@ -297,11 +297,22 @@ const GameCanvas = ({
       basic: CELL_SIZE / 4, fast: CELL_SIZE / 5, tank: CELL_SIZE / 2.5, flying: CELL_SIZE / 4.5, boss: CELL_SIZE / 2
     }
     const size = sizes[enemy.enemy_type] || CELL_SIZE / 4
+    const isSlowed = (enemy.slow_duration ?? 0) > 0
 
-    ctx.fillStyle = colors[enemy.enemy_type] || '#ff4444'
+    // Slowed enemies render in blue; normal enemies use their type color
+    ctx.fillStyle = isSlowed ? '#42A5F5' : (colors[enemy.enemy_type] || '#ff4444')
     ctx.beginPath()
     ctx.arc(x, y, size, 0, Math.PI * 2)
     ctx.fill()
+
+    // Blue ring on slowed enemies so it's readable at a glance
+    if (isSlowed) {
+      ctx.strokeStyle = '#90CAF9'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(x, y, size + 3, 0, Math.PI * 2)
+      ctx.stroke()
+    }
 
     const barWidth = CELL_SIZE * 0.8
     const barHeight = 4
@@ -319,14 +330,17 @@ const GameCanvas = ({
   const drawProjectile = (ctx: CanvasRenderingContext2D, projectile: any) => {
     const x = projectile.position.x * CELL_SIZE + CELL_SIZE / 2
     const y = projectile.position.y * CELL_SIZE + CELL_SIZE / 2
-    ctx.fillStyle = '#ffff00'
+    const isAOE = !!projectile.is_aoe
+    const color = isAOE ? '#FF9800' : '#ffff00'
+
+    ctx.fillStyle = color
     ctx.shadowBlur = 15
-    ctx.shadowColor = '#ffff00'
+    ctx.shadowColor = color
     ctx.beginPath()
-    ctx.arc(x, y, 5, 0, Math.PI * 2)
+    ctx.arc(x, y, isAOE ? 6 : 5, 0, Math.PI * 2)
     ctx.fill()
     ctx.shadowBlur = 0
-    ctx.strokeStyle = 'rgba(255, 255, 0, 0.6)'
+    ctx.strokeStyle = isAOE ? 'rgba(255, 152, 0, 0.6)' : 'rgba(255, 255, 0, 0.6)'
     ctx.lineWidth = 3
     ctx.lineCap = 'round'
     ctx.beginPath()
