@@ -9,16 +9,17 @@ import (
 
 // Message types
 const (
-	MessageTypeJoinRoom    = "join_room"
-	MessageTypeLeaveRoom   = "leave_room"
-	MessageTypeGameState   = "game_state"
-	MessageTypePlaceTower  = "place_tower"
-	MessageTypeRemoveTower = "remove_tower"
-	MessageTypeStartWave   = "start_wave"
-	MessageTypePauseGame   = "pause_game"
-	MessageTypeSpawnEnemy  = "spawn_enemy"
-	MessageTypeClearAll    = "clear_all"
-	MessageTypeNewGame     = "new_game"
+	MessageTypeJoinRoom      = "join_room"
+	MessageTypeLeaveRoom     = "leave_room"
+	MessageTypeGameState     = "game_state"
+	MessageTypePlaceTower    = "place_tower"
+	MessageTypeRemoveTower   = "remove_tower"
+	MessageTypeUpgradeTower  = "upgrade_tower"
+	MessageTypeSetSpeed      = "set_speed"
+	MessageTypeStartWave     = "start_wave"
+	MessageTypePauseGame     = "pause_game"
+	MessageTypeSpawnEnemy    = "spawn_enemy"
+	MessageTypeNewGame       = "new_game"
 )
 
 // Message represents a WebSocket message

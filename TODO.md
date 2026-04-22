@@ -109,7 +109,7 @@
 
 ## 🚧 In Progress / Next Up
 
-### Phase 12: Difficulty & Economy Balancing ✅ **NEW!**
+### Phase 12: Difficulty & Economy Balancing ✅
 - [x] Enemy health scales with wave number (+10% compound per wave above wave 5)
 - [x] Enemy speed scales with wave number (+3% compound per wave above wave 5, capped at +80%)
 - [x] Enemy count ramp adjusted — quadratic growth past wave 10
@@ -123,13 +123,21 @@
 - [x] AOE explosions render at full splash radius so effect is visible
 - [x] Playtesting target met: average player struggles around wave 20
 
-### Phase 13: Tower Sell & Upgrades
-- [x] Sell tower (70% refund) ✅
-- [ ] Tower upgrade system (levels 1-3)
-- [ ] Increased damage/range per level
-- [ ] Visual indicator for tower level
-- [ ] Upgrade cost scaling
-- [ ] Upgrade UI in tower info panel
+### Phase 13: Tower Upgrades ✅ **NEW!**
+- [x] Tower upgrade system (levels 1-4, 3 upgrades per tower)
+- [x] +20% damage and +10% range compound per level
+- [x] Slow tower upgrades: duration 2s→3.5s, multiplier 0.40→0.25 across levels
+- [x] Splash tower upgrades: AOE radius 1.5→2.4, AOE damage 60%→90% across levels
+- [x] Upgrade cost equals base tower cost per level
+- [x] Sell refunds 70% of total spent (base + all upgrades)
+- [x] Gold rings on canvas: 1 ring = level 2, 2 rings = level 3, 3 rings = level 4
+- [x] Selection ring pushed outside upgrade rings so gold rings always visible
+- [x] Tower body stays type color when selected (was incorrectly turning white)
+- [x] Upgrade button in info panel (gold when affordable, gray when not, MAX label at level 4)
+- [x] Info panel syncs immediately on upgrade without requiring reselect
+- [x] Fast forward mode: 3x game speed (movement, shooting, spawning, effects)
+- [x] FF button in header, orange when active, resets on New Game
+- [x] Removed Clear All button (redundant with New Game + Sell)
 
 ### Phase 14: Health & Scoring
 - [x] Health reduction when enemy reaches goal ✅
@@ -304,8 +312,8 @@
 - Stable across 55+ waves ✅
 
 ### Known Issues to Address Next
-- Tower upgrades not yet implemented (Phase 13)
 - No score system yet (Phase 14)
+- No tower upgrade UI for special stats (slow duration, splash radius not shown in panel)
 - No sound
 
 ---
@@ -315,29 +323,46 @@
 ### Phase 12 — Difficulty & Economy Balancing
 
 1. **Enemy Scaling**
-   - Health: +10% compound per wave above wave 5 (wave 10 = 1.6x, wave 20 = 2.6x base)
+   - Health: +10% compound per wave above wave 5
    - Speed: +3% compound per wave above wave 5, capped at +80% of base
-   - Count: quadratic growth past wave 10 so late waves feel like a flood
+   - Count: quadratic growth past wave 10
    - Boss frequency: every 3rd wave from wave 11 (was every 5th)
    - Spawn delay floors at 0.25s (was 0.4s)
 
 2. **Slow Tower**
-   - Now applies a real 60% speed debuff for 2 seconds on hit
-   - Hitting a slowed enemy refreshes the duration rather than stacking
-   - Slowed enemies render blue with a light ring — visually readable at a glance
+   - 60% speed debuff for 2 seconds, refreshes on re-hit
+   - Slowed enemies render blue with ring indicator
 
 3. **Splash Tower**
-   - Now deals true AOE damage: full damage to primary target, 60% to all enemies within 1.5 units
-   - Splash projectiles render orange (matching tower color) and slightly larger
-   - AOE explosions scale to the full splash radius so the effect is visible
+   - True AOE: full damage to target, 60% to enemies within 1.5 units
+   - Orange projectiles, AOE explosion scales to full radius
 
 ### Playtesting Results
-- Wave 20 reached with 40 health remaining and 66 enemies incoming ✅
-- Economy stays tight at wave 20 ($165 gold) ✅
-- 120 towers placed — density costs health rather than guaranteeing a win ✅
-- All 4 tower types now have distinct, meaningful roles ✅
+- Wave 20 reached with 40 health and 66 enemies incoming ✅
+- Economy stays tight at wave 20 ✅
+- All 4 tower types now have distinct roles ✅
+
+### Phase 13 — Tower Upgrades
+
+1. **Upgrade System**
+   - 4 levels per tower (3 upgrades), cost = base tower price per upgrade
+   - +20% damage and +10% range compound per level
+   - Slow upgrades: duration 2s→3.5s, slow strength 0.40→0.25 multiplier
+   - Splash upgrades: AOE radius 1.5→2.4 units, AOE damage 60%→90%
+   - Sell refunds 70% of total spent including upgrades
+
+2. **Visuals**
+   - Gold rings radiate outward from tower body (1/2/3 rings for levels 2/3/4)
+   - Selection ring pushed outside outermost upgrade ring
+   - Tower body stays type color when selected
+   - MAX badge replaces upgrade button at level 4
+
+3. **Quality of Life**
+   - Fast forward mode (3x speed) for testing high waves quickly
+   - Removed Clear All button
+   - Fixed upgrade panel not updating until tower was reselected
 
 ---
 
 **Last Updated**: April 22, 2026
-**Status**: Phase 12 Complete ✅ | Moving to Phase 13 (Tower Upgrades) 🚧
+**Status**: Phase 13 Complete ✅ | Moving to Phase 14 (Score System) 🚧

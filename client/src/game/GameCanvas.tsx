@@ -15,9 +15,9 @@ interface GameCanvasProps {
   isConnected: boolean
   onPlaceTower: (x: number, y: number, towerType: string) => void
   onSellTower: (towerId: number) => void
+  onUpgradeTower: (towerId: number) => void
   onStartWave: () => void
   onNewGame: () => void
-  onClearTowers: () => void
   onSpawnEnemy?: () => void
   gameState?: GameState
   showDebug?: boolean
@@ -48,9 +48,9 @@ const GameCanvas = ({
   isConnected,
   onPlaceTower,
   onSellTower,
+  onUpgradeTower,
   onStartWave,
   onNewGame,
-  onClearTowers,
   onSpawnEnemy,
   gameState,
   showDebug,
@@ -84,7 +84,6 @@ const GameCanvas = ({
   useEffect(() => {
     if (!autoWave || isWaveActive || isGameOver || !isConnected) return
 
-    // Start countdown when wave clears and auto is on
     setCountdown(5)
     const tick = setInterval(() => {
       setCountdown(prev => {
@@ -111,10 +110,15 @@ const GameCanvas = ({
   }, [isWaveActive, isGameOver])
 
   // Deselect tower if it no longer exists (was sold or cleared)
+  // Also sync selected tower stats when server broadcasts an update (e.g. after upgrade)
   useEffect(() => {
     if (selectedTower) {
-      const still = gameState?.towers.find(t => t.id === selectedTower.id)
-      if (!still) setSelectedTower(null)
+      const updated = gameState?.towers.find(t => t.id === selectedTower.id)
+      if (!updated) {
+        setSelectedTower(null)
+      } else if (updated.level !== selectedTower.level || updated.damage !== selectedTower.damage) {
+        setSelectedTower(updated)
+      }
     }
   }, [gameState?.towers])
 
@@ -162,7 +166,6 @@ const GameCanvas = ({
     currentFlashes.forEach(flash => drawMuzzleFlash(ctx, flash))
     currentExplosions.forEach(explosion => drawExplosion(ctx, explosion))
 
-    // Draw selected tower highlight and range
     if (selTower) {
       const t = currentTowers.find(t => t.id === selTower.id)
       if (t) drawSelectedTowerHighlight(ctx, t)
@@ -235,12 +238,15 @@ const GameCanvas = ({
   const drawSelectedTowerHighlight = (ctx: CanvasRenderingContext2D, tower: Tower) => {
     const x = tower.position.x * CELL_SIZE + CELL_SIZE / 2
     const y = tower.position.y * CELL_SIZE + CELL_SIZE / 2
-    // Pulsing white ring
+    // Selection ring sits outside all upgrade rings (level 4 outermost is CELL_SIZE/3 + 16)
+    const selectionRadius = CELL_SIZE / 3 + 22
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'
-    ctx.lineWidth = 3
+    ctx.lineWidth = 2
+    ctx.setLineDash([5, 4])
     ctx.beginPath()
-    ctx.arc(x, y, CELL_SIZE / 2 + 2, 0, Math.PI * 2)
+    ctx.arc(x, y, selectionRadius, 0, Math.PI * 2)
     ctx.stroke()
+    ctx.setLineDash([])
     // Range circle
     ctx.strokeStyle = 'rgba(100, 200, 255, 0.5)'
     ctx.lineWidth = 2
@@ -254,20 +260,15 @@ const GameCanvas = ({
   const drawTower = (ctx: CanvasRenderingContext2D, tower: Tower, isSelected: boolean) => {
     const x = tower.position.x * CELL_SIZE + CELL_SIZE / 2
     const y = tower.position.y * CELL_SIZE + CELL_SIZE / 2
+    const color = TOWER_COLORS[tower.tower_type] || '#4CAF50'
 
-    ctx.fillStyle = isSelected ? '#ffffff' : (TOWER_COLORS[tower.tower_type] || '#4CAF50')
+    // Body — always type color, never white (selection shown by outer ring only)
+    ctx.fillStyle = color
     ctx.beginPath()
     ctx.arc(x, y, CELL_SIZE / 3, 0, Math.PI * 2)
     ctx.fill()
 
-    if (isSelected) {
-      ctx.strokeStyle = TOWER_COLORS[tower.tower_type] || '#4CAF50'
-      ctx.lineWidth = 3
-      ctx.beginPath()
-      ctx.arc(x, y, CELL_SIZE / 3, 0, Math.PI * 2)
-      ctx.stroke()
-    }
-
+    // Barrel
     const rotation = tower.rotation || 0
     ctx.save()
     ctx.translate(x, y)
@@ -278,6 +279,31 @@ const GameCanvas = ({
     ctx.fillRect(CELL_SIZE / 3, -3, CELL_SIZE / 6, 6)
     ctx.restore()
 
+    // Upgrade rings — gold, radiating outward, fading per ring
+    const level = tower.level || 1
+    if (level >= 2) {
+      ctx.strokeStyle = '#FFD700'
+      ctx.lineWidth = 2.5
+      ctx.beginPath()
+      ctx.arc(x, y, CELL_SIZE / 3 + 6, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    if (level >= 3) {
+      ctx.strokeStyle = 'rgba(255, 215, 0, 0.6)'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(x, y, CELL_SIZE / 3 + 11, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    if (level >= 4) {
+      ctx.strokeStyle = 'rgba(255, 215, 0, 0.35)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.arc(x, y, CELL_SIZE / 3 + 16, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+
+    // Active target indicator (only when not selected)
     if (tower.current_target && !isSelected) {
       ctx.strokeStyle = '#ff0000'
       ctx.lineWidth = 2
@@ -299,13 +325,11 @@ const GameCanvas = ({
     const size = sizes[enemy.enemy_type] || CELL_SIZE / 4
     const isSlowed = (enemy.slow_duration ?? 0) > 0
 
-    // Slowed enemies render in blue; normal enemies use their type color
     ctx.fillStyle = isSlowed ? '#42A5F5' : (colors[enemy.enemy_type] || '#ff4444')
     ctx.beginPath()
     ctx.arc(x, y, size, 0, Math.PI * 2)
     ctx.fill()
 
-    // Blue ring on slowed enemies so it's readable at a glance
     if (isSlowed) {
       ctx.strokeStyle = '#90CAF9'
       ctx.lineWidth = 2
@@ -422,18 +446,15 @@ const GameCanvas = ({
 
     if (!hovered) return
 
-    // Check if clicking an existing tower
     const clickedTower = currentTowers.find(
       t => t.position.x === hovered.x && t.position.y === hovered.y
     )
 
     if (clickedTower) {
-      // Select or deselect tower
       setSelectedTower(prev => prev?.id === clickedTower.id ? null : clickedTower)
       return
     }
 
-    // Clicking empty cell — deselect if something selected, otherwise place tower
     if (selectedTowerRef.current) {
       setSelectedTower(null)
       return
@@ -451,13 +472,18 @@ const GameCanvas = ({
     }
   }
 
+  const handleUpgradeSelected = () => {
+    if (selectedTower) {
+      onUpgradeTower(selectedTower.id)
+    }
+  }
+
   const handleStartWave = () => {
     if (countdownRef.current) clearInterval(countdownRef.current)
     setCountdown(null)
     onStartWave()
   }
 
-  // Wave status line
   const waveStatusLabel = () => {
     if (isGameOver) return null
     if (isWaveActive) {
@@ -478,11 +504,15 @@ const GameCanvas = ({
     { type: 'slow', icon: '❄️', label: 'Slow' },
   ]
 
-  const sellPrice = selectedTower ? Math.floor(TOWER_COSTS[selectedTower.tower_type as TowerType] * 0.7) : 0
+  const sellPrice = selectedTower
+    ? Math.floor((selectedTower.total_spent ?? TOWER_COSTS[selectedTower.tower_type as TowerType]) * 0.7)
+    : 0
+  const upgradeCost = selectedTower ? TOWER_COSTS[selectedTower.tower_type as TowerType] : 0
+  const canAffordUpgrade = selectedTower ? gold >= upgradeCost : false
+  const isMaxLevel = selectedTower ? (selectedTower.level ?? 1) >= 4 : false
 
   return (
     <div className="game-canvas-container">
-      {/* Game Over Overlay */}
       {isGameOver && (
         <div style={{
           position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
@@ -543,7 +573,6 @@ const GameCanvas = ({
         </button>
       </div>
 
-      {/* Selected tower info panel */}
       {selectedTower && (
         <div style={{
           margin: '6px auto',
@@ -559,7 +588,7 @@ const GameCanvas = ({
           maxWidth: '600px',
         }}>
           <div style={{ color: TOWER_COLORS[selectedTower.tower_type], fontWeight: 'bold', fontSize: '15px' }}>
-            {TOWER_LABELS[selectedTower.tower_type]} Tower #{selectedTower.id}
+            {TOWER_LABELS[selectedTower.tower_type]} — Level {selectedTower.level ?? 1}{isMaxLevel ? ' ★ MAX' : ''}
           </div>
           <div>🎯 Range: <strong>{selectedTower.range}</strong></div>
           <div>⚔️ Damage: <strong>{selectedTower.damage}</strong></div>
@@ -577,8 +606,36 @@ const GameCanvas = ({
               fontSize: '13px',
             }}
           >
-            💰 Sell for ${sellPrice}
+            💰 Sell ${sellPrice}
           </button>
+          {isMaxLevel ? (
+            <span style={{
+              padding: '6px 16px',
+              background: '#333',
+              color: '#FFD700',
+              borderRadius: '6px',
+              fontSize: '13px',
+              fontWeight: 'bold',
+            }}>★ MAX</span>
+          ) : (
+            <button
+              onClick={handleUpgradeSelected}
+              disabled={!canAffordUpgrade}
+              title={canAffordUpgrade ? `Upgrade to level ${(selectedTower.level ?? 1) + 1}` : `Need $${upgradeCost} to upgrade`}
+              style={{
+                padding: '6px 16px',
+                background: canAffordUpgrade ? '#FFD700' : '#555',
+                color: canAffordUpgrade ? '#333' : '#888',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: canAffordUpgrade ? 'pointer' : 'not-allowed',
+                fontWeight: 'bold',
+                fontSize: '13px',
+              }}
+            >
+              ⬆ Upgrade ${upgradeCost}
+            </button>
+          )}
           <button
             onClick={() => setSelectedTower(null)}
             style={{
@@ -622,7 +679,6 @@ const GameCanvas = ({
           onClick={() => {
             setAutoWave(prev => {
               if (prev) {
-                // Turning off — cancel any active countdown
                 if (countdownRef.current) clearInterval(countdownRef.current)
                 setCountdown(null)
               }
@@ -646,14 +702,6 @@ const GameCanvas = ({
         >
           🔄 New Game
         </button>
-        <button
-          className="btn btn-danger"
-          onClick={onClearTowers}
-          disabled={!isConnected || isWaveActive}
-          title={isWaveActive ? 'Cannot clear during a wave' : 'Clear all towers and enemies'}
-        >
-          Clear All
-        </button>
         {showDebug && (
           <button className="btn" style={{ background: '#555' }} onClick={onSpawnEnemy} disabled={!isConnected}>
             🦀 Spawn Test
@@ -672,7 +720,7 @@ const GameCanvas = ({
             ? '👆 Click elsewhere to deselect tower'
             : selectedTowerType === null
             ? '🖱️ Cursor mode — click a tower to select it'
-            : '💡 Click a tower to select and sell it, or click the grid to place'}
+            : '💡 Click a tower to select and upgrade/sell it, or click the grid to place'}
         </p>
       </div>
     </div>

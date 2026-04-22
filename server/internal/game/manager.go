@@ -160,7 +160,7 @@ func (m *Manager) StartGameLoop(roomID string) {
 			return
 		}
 
-		room.Update(1.0 / 60.0)
+		room.Update(1.0 / 60.0 * room.GetSpeedMultiplier())
 
 		snapshot := room.GetSnapshot()
 
@@ -248,12 +248,14 @@ func (m *Manager) SpawnWave(roomID string) {
 
 			room.DecrementEnemiesRemaining()
 
+			spawnDelay := group.SpawnDelay / room.GetSpeedMultiplier()
+
 			// Wait before next spawn, but bail early if cancelled
 			select {
 			case <-cancel:
 				log.Printf("🛑 Wave %d spawn cancelled during delay (new game)", waveNum)
 				return
-			case <-time.After(time.Duration(group.SpawnDelay * float64(time.Second))):
+			case <-time.After(time.Duration(spawnDelay * float64(time.Second))):
 			}
 		}
 	}

@@ -129,6 +129,13 @@ type Tower struct {
 	Cooldown      float64  `json:"cooldown"`
 	Rotation      float64  `json:"rotation"`
 	CurrentTarget int      `json:"current_target,omitempty"`
+	TotalSpent    int      `json:"total_spent"`
+	// Slow tower upgrade fields
+	SlowDuration   float64 `json:"slow_duration_upgrade,omitempty"`
+	SlowMultiplier float64 `json:"slow_multiplier_upgrade,omitempty"`
+	// Splash tower upgrade fields
+	AOERadius float64 `json:"aoe_radius_upgrade,omitempty"`
+	AOEDamage float64 `json:"aoe_damage_pct_upgrade,omitempty"`
 }
 
 // Enemy represents a hostile unit
@@ -188,6 +195,8 @@ type GameStateWithShooting struct {
 	Phase            GamePhase     `json:"phase"`
 	EnemiesRemaining int           `json:"enemies_remaining"`
 	GameTime         float64       `json:"game_time"`
+	FastForward      bool          `json:"fast_forward"`
+	SpeedMultiplier  float64       `json:"speed_multiplier"`
 	SpawnPoint       *Position     `json:"spawn_point,omitempty"`
 	GoalPoint        *Position     `json:"goal_point,omitempty"`
 	mu               sync.RWMutex
@@ -213,6 +222,7 @@ func NewGameStateWithShooting(roomID string) *GameStateWithShooting {
 		Phase:            PhaseWaiting,
 		EnemiesRemaining: 0,
 		GameTime:         0,
+		SpeedMultiplier:  1.0,
 		nextTowerID:      1,
 		nextEnemyID:      1,
 		nextProjectileID: 1,
@@ -240,6 +250,8 @@ func (gs *GameStateWithShooting) Reset() {
 	gs.Phase = PhaseWaiting
 	gs.EnemiesRemaining = 0
 	gs.GameTime = 0
+	gs.FastForward = false
+	gs.SpeedMultiplier = 1.0
 	gs.nextTowerID = 1
 	gs.nextEnemyID = 1
 	gs.nextProjectileID = 1
@@ -337,8 +349,17 @@ func (gs *GameStateWithShooting) shootProjectile(tower *Tower, target *Enemy) {
 
 	if tower.TowerType == "splash" {
 		proj.IsAOE = true
-		proj.AOERadius = 1.5
-		proj.AOEDamage = tower.Damage * 0.6
+		// Use tower's upgraded AOE fields if set, fall back to defaults
+		if tower.AOERadius > 0 {
+			proj.AOERadius = tower.AOERadius
+		} else {
+			proj.AOERadius = 1.5
+		}
+		if tower.AOEDamage > 0 {
+			proj.AOEDamage = tower.Damage * tower.AOEDamage
+		} else {
+			proj.AOEDamage = tower.Damage * 0.60
+		}
 	}
 
 	gs.Projectiles = append(gs.Projectiles, proj)
@@ -378,9 +399,22 @@ func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
 			}
 
 			if firingTowerType == "slow" {
-				// Slow towers apply a speed debuff; refreshes duration, does not stack.
-				target.SlowDuration = 2.0
-				target.SlowMultiplier = 0.4
+				// Read slow parameters from the tower itself so upgrades take effect
+				slowDuration := 2.0
+				slowMultiplier := 0.40
+				for _, t := range gs.Towers {
+					if t.ID == proj.TowerID {
+						if t.SlowDuration > 0 {
+							slowDuration = t.SlowDuration
+						}
+						if t.SlowMultiplier > 0 {
+							slowMultiplier = t.SlowMultiplier
+						}
+						break
+					}
+				}
+				target.SlowDuration = slowDuration
+				target.SlowMultiplier = slowMultiplier
 				target.Health -= proj.Damage
 			} else {
 				target.Health -= proj.Damage
@@ -527,15 +561,26 @@ func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) (Tower
 	}
 
 	tower := Tower{
-		ID:        gs.nextTowerID,
-		Position:  Position{X: x, Y: y},
-		TowerType: towerType,
-		Level:     1,
-		Range:     stats.Range,
-		Damage:    stats.Damage,
-		FireRate:  stats.FireRate,
-		Cooldown:  0,
-		Rotation:  0,
+		ID:         gs.nextTowerID,
+		Position:   Position{X: x, Y: y},
+		TowerType:  towerType,
+		Level:      1,
+		Range:      stats.Range,
+		Damage:     stats.Damage,
+		FireRate:   stats.FireRate,
+		Cooldown:   0,
+		Rotation:   0,
+		TotalSpent: cost,
+	}
+
+	// Initialize special fields for slow and splash towers
+	if towerType == "slow" {
+		tower.SlowDuration = 2.0
+		tower.SlowMultiplier = 0.40
+	}
+	if towerType == "splash" {
+		tower.AOERadius = 1.5
+		tower.AOEDamage = 0.60
 	}
 
 	gs.Gold -= cost
@@ -553,8 +598,7 @@ func (gs *GameStateWithShooting) RemoveTower(towerID int) (int, bool) {
 
 	for i, tower := range gs.Towers {
 		if tower.ID == towerID {
-			cost := getTowerCost(tower.TowerType)
-			refund := int(float64(cost) * 0.7)
+			refund := int(float64(tower.TotalSpent) * 0.7)
 			gs.Gold += refund
 			gs.Towers = append(gs.Towers[:i], gs.Towers[i+1:]...)
 			active := make([]Projectile, 0)
@@ -571,7 +615,59 @@ func (gs *GameStateWithShooting) RemoveTower(towerID int) (int, bool) {
 	return 0, false
 }
 
-// AddEnemy adds an enemy to the game with stats scaled to the current wave.
+// UpgradeTower upgrades a tower by one level (max level 4).
+// Each upgrade costs the same as the original tower purchase price.
+// Stats scale +20% damage and +10% range per level.
+// Slow towers also improve slow duration and multiplier.
+// Splash towers also improve AOE radius and damage percentage.
+func (gs *GameStateWithShooting) UpgradeTower(towerID int) (Tower, bool) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
+	for i := range gs.Towers {
+		tower := &gs.Towers[i]
+		if tower.ID != towerID {
+			continue
+		}
+		if tower.Level >= 4 {
+			return Tower{}, false
+		}
+
+		cost := getTowerCost(tower.TowerType)
+		if gs.Gold < cost {
+			return Tower{}, false
+		}
+
+		gs.Gold -= cost
+		tower.TotalSpent += cost
+		tower.Level++
+
+		// Core stat scaling: +20% damage, +10% range per level above 1
+		base := getTowerStats(tower.TowerType)
+		levelMult := math.Pow(1.20, float64(tower.Level-1))
+		tower.Damage = math.Round(base.Damage*levelMult*10) / 10
+		tower.Range = math.Round(base.Range*math.Pow(1.10, float64(tower.Level-1))*100) / 100
+
+		// Slow tower: longer duration and stronger slow each level
+		// L1: 2.0s / 0.40x  L2: 2.5s / 0.35x  L3: 3.0s / 0.30x  L4: 3.5s / 0.25x
+		if tower.TowerType == "slow" {
+			tower.SlowDuration = 2.0 + float64(tower.Level-1)*0.5
+			tower.SlowMultiplier = 0.40 - float64(tower.Level-1)*0.05
+		}
+
+		// Splash tower: wider radius and higher AOE damage % each level
+		// L1: 1.5 / 60%  L2: 1.8 / 70%  L3: 2.1 / 80%  L4: 2.4 / 90%
+		if tower.TowerType == "splash" {
+			tower.AOERadius = 1.5 + float64(tower.Level-1)*0.3
+			tower.AOEDamage = 0.60 + float64(tower.Level-1)*0.10
+		}
+
+		return *tower, true
+	}
+	return Tower{}, false
+}
+
+
 func (gs *GameStateWithShooting) AddEnemy(enemyType string, path []Position, wave int) Enemy {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
@@ -613,6 +709,32 @@ func (gs *GameStateWithShooting) GetSpawnCancel() <-chan struct{} {
 	gs.mu.RLock()
 	defer gs.mu.RUnlock()
 	return gs.spawnCancel
+}
+
+func (gs *GameStateWithShooting) SetFastForward(enabled bool) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	gs.FastForward = enabled
+	if enabled {
+		gs.SpeedMultiplier = 3.0
+	} else {
+		gs.SpeedMultiplier = 1.0
+	}
+}
+
+func (gs *GameStateWithShooting) GetSpeedMultiplier() float64 {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	if gs.SpeedMultiplier <= 0 {
+		return 1.0
+	}
+	return gs.SpeedMultiplier
+}
+
+func (gs *GameStateWithShooting) IsFastForward() bool {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	return gs.FastForward
 }
 
 func (gs *GameStateWithShooting) RemoveAllTowers() {

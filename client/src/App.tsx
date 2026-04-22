@@ -30,6 +30,7 @@ function App() {
   const [hasJoined, setHasJoined] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
   const [gameState, setGameState] = useState<GameState>(defaultGameState)
+  const [fastForward, setFastForward] = useState(false)
 
   useEffect(() => {
     if (status.isConnected && !hasJoined) {
@@ -121,6 +122,15 @@ function App() {
     })
   }
 
+  const handleUpgradeTower = (towerId: number) => {
+    if (!hasJoined) return
+    sendMessage({
+      type: 'upgrade_tower',
+      room_id: ROOM_ID,
+      payload: { tower_id: towerId }
+    })
+  }
+
   const handleStartWave = () => {
     if (!hasJoined || gameState.phase !== 'waiting') return
     sendMessage({ type: 'start_wave', room_id: ROOM_ID })
@@ -130,11 +140,7 @@ function App() {
     if (!hasJoined) return
     sendMessage({ type: 'new_game', room_id: ROOM_ID })
     setGameState(defaultGameState)
-  }
-
-  const handleClearAll = () => {
-    if (!hasJoined) return
-    sendMessage({ type: 'clear_all', room_id: ROOM_ID })
+    setFastForward(false)
   }
 
   // Keep spawn enemy for debug purposes
@@ -177,6 +183,26 @@ function App() {
             }}
           >
             {showDebug ? '🐛 Hide Debug' : '🐛 Show Debug'}
+          </button>
+          <button
+            onClick={() => {
+              const next = !fastForward
+              setFastForward(next)
+              sendMessage({ type: 'set_speed', room_id: ROOM_ID, payload: { fast_forward: next } })
+            }}
+            style={{
+              marginLeft: '8px',
+              padding: '5px 10px',
+              fontSize: '12px',
+              cursor: 'pointer',
+              background: fastForward ? '#FF9800' : '#666',
+              border: 'none',
+              borderRadius: '4px',
+              color: 'white'
+            }}
+            title="Fast forward: 3x game speed for testing"
+          >
+            {fastForward ? '⏩ FF: ON' : '⏩ FF: OFF'}
           </button>
         </div>
 
@@ -244,9 +270,9 @@ function App() {
           gameState={gameState}
           onPlaceTower={handlePlaceTower}
           onSellTower={handleSellTower}
+          onUpgradeTower={handleUpgradeTower}
           onStartWave={handleStartWave}
           onNewGame={handleNewGame}
-          onClearTowers={handleClearAll}
           onSpawnEnemy={handleSpawnEnemy}
           showDebug={showDebug}
         />
