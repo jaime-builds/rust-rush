@@ -207,6 +207,43 @@ func (c *Client) handleMessage(msg *Message) {
 			})
 		}
 
+	case MessageTypeUpgradeTower:
+		roomID := msg.RoomID
+		if roomID == "" {
+			roomID = c.roomID
+		}
+		if roomID == "" {
+			return
+		}
+		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
+		if !exists {
+			return
+		}
+		towerID, ok := msg.Payload["tower_id"].(float64)
+		if !ok {
+			log.Printf("Invalid tower_id in upgrade_tower: %v", msg.Payload)
+			return
+		}
+		tower, upgraded := room.UpgradeTower(int(towerID))
+		if upgraded {
+			log.Printf("Upgraded tower %d to level %d in room %s", int(towerID), tower.Level, roomID)
+			c.hub.BroadcastGameState(roomID)
+			c.sendJSON(Message{
+				Type: MessageTypeUpgradeTower,
+				Payload: map[string]interface{}{
+					"status": "upgraded",
+					"tower":  tower,
+				},
+			})
+		} else {
+			c.sendJSON(Message{
+				Type: MessageTypeUpgradeTower,
+				Payload: map[string]interface{}{
+					"status": "failed",
+				},
+			})
+		}
+
 	case MessageTypeSpawnEnemy:
 		// Use room_id from message if provided, otherwise use client's stored roomID
 		roomID := msg.RoomID
@@ -273,41 +310,21 @@ func (c *Client) handleMessage(msg *Message) {
 			c.sendJSON(response)
 		}
 
-	case MessageTypeClearAll:
-		// Use room_id from message if provided, otherwise use client's stored roomID
+	case MessageTypeSetSpeed:
 		roomID := msg.RoomID
 		if roomID == "" {
 			roomID = c.roomID
 		}
-
 		if roomID == "" {
-			log.Printf("Client %s tried to clear all but is not in a room", c.id)
 			return
 		}
-
 		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
 		if !exists {
-			log.Printf("Room %s does not exist", roomID)
 			return
 		}
-
-		// Clear towers and enemies
-		room.RemoveAllTowers()
-		room.RemoveAllEnemies()
-
-		log.Printf("Cleared all towers and enemies in room %s", roomID)
-
-		// Broadcast updated state
-		c.hub.BroadcastGameState(roomID)
-
-		// Send acknowledgment
-		response := Message{
-			Type: MessageTypeClearAll,
-			Payload: map[string]interface{}{
-				"status": "cleared",
-			},
-		}
-		c.sendJSON(response)
+		ff, _ := msg.Payload["fast_forward"].(bool)
+		room.SetFastForward(ff)
+		log.Printf("⏩ Fast forward: %v in room %s", ff, roomID)
 
 	case MessageTypeStartWave:
 		roomID := msg.RoomID

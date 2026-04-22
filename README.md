@@ -13,7 +13,8 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 
 #### Core Gameplay
 - **Interactive Tower Placement** — Click to place 4 tower types on a 20×15 grid
-- **Tower Sell System** — Click any tower to select it, view stats, and sell for 70% refund
+- **Tower Sell System** — Click any tower to select it, view stats, and sell for 70% refund of total spent
+- **Tower Upgrades** — Upgrade towers up to level 4 for +20% damage and +10% range per level; slow and splash towers also improve their special effects
 - **Gold Economy** — Towers cost gold, enemies reward gold on death (scaled by type)
 - **Wave System** — Start waves manually or use Auto Wave with a 5-second countdown
 - **Enemy Progression** — Waves scale from basic enemies up to fast, tank, and boss types
@@ -29,7 +30,7 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 - **Health Bars** — Real-time above each enemy
 - **Tower Rotation** — Towers rotate to face their current target
 - **Range Indicators** — Dashed circles show range when a tower is selected
-- **Tower Selection Highlight** — White ring marks the selected tower
+- **Tower Upgrade Rings** — Gold rings around towers indicate upgrade level (1–3 rings for levels 2–4)
 - **Slow Visual** — Slowed enemies render blue with a ring indicator
 
 #### Game Flow
@@ -38,6 +39,7 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 - **Wave Status Bar** — Shows wave number, phase, and enemies remaining
 - **Cursor Mode** — "None" button clears the tower preview from the cursor
 - **Game Over Screen** — Shows waves survived with a Play Again button
+- **Fast Forward** — 3x game speed toggle for testing (header button)
 
 #### Technical
 - **Server-Authoritative** — All game logic runs on the Go server
@@ -49,12 +51,23 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 
 ### Tower Types
 
-| Tower    | Cost | Range | Damage | Fire Rate | Special                        |
-|----------|------|-------|--------|-----------|--------------------------------|
-| 🗼 Basic  | $50  | 3.0   | 15     | 1.0/sec   | Reliable all-rounder           |
-| 🎯 Sniper | $100 | 6.0   | 50     | 0.5/sec   | Long-range, high single-target |
-| 💥 Splash | $75  | 2.5   | 10     | 1.5/sec   | AOE: 60% damage in 1.5u radius |
-| ❄️ Slow   | $60  | 3.5   | 8      | 0.8/sec   | 60% speed reduction for 2s     |
+| Tower    | Cost | Range | Damage | Fire Rate | Special                                              |
+|----------|------|-------|--------|-----------|------------------------------------------------------|
+| 🗼 Basic  | $50  | 3.0   | 15     | 1.0/sec   | Reliable all-rounder                                 |
+| 🎯 Sniper | $100 | 6.0   | 50     | 0.5/sec   | Long-range, high single-target                       |
+| 💥 Splash | $75  | 2.5   | 10     | 1.5/sec   | AOE: 60% damage in 1.5u radius, upgrades increase both |
+| ❄️ Slow   | $60  | 3.5   | 8      | 0.8/sec   | 60% speed reduction, upgrades extend duration/strength |
+
+### Tower Upgrades
+
+| Level | Upgrade Cost | Damage | Range | Notes                          |
+|-------|-------------|--------|-------|--------------------------------|
+| 1     | —           | base   | base  | Starting stats                 |
+| 2     | = base cost | +20%   | +10%  | 1 gold ring                   |
+| 3     | = base cost | +44%   | +21%  | 2 gold rings                  |
+| 4 MAX | = base cost | +73%   | +33%  | 3 gold rings, MAX badge       |
+
+Sell at any level refunds 70% of total gold spent.
 
 ### Enemy Types
 
@@ -78,9 +91,9 @@ Both health and speed scale with wave number — enemies get meaningfully toughe
 
 ### 🚧 Coming Next
 - Score system
-- Tower upgrades (levels 1-3)
 - Enemy glossary & wave preview
 - Sound effects
+- Special stat display in upgrade panel (slow duration, splash radius)
 
 ## 🏗️ Architecture
 
@@ -97,7 +110,7 @@ Both health and speed scale with wave number — enemies get meaningfully toughe
 ┌──────────────────────────▼───────────────────────────────────┐
 │                     SERVER (Go)                              │
 │  - 60 FPS game loop                                          │
-│  - Tower targeting, shooting, selling                        │
+│  - Tower targeting, shooting, selling, upgrading             │
 │  - Projectile physics & collision                            │
 │  - Enemy movement & BFS pathfinding                          │
 │  - Wave spawner goroutine (cancellable)                      │
@@ -142,15 +155,16 @@ Client starts on `http://localhost:5173`
 1. **Place towers** — Select a tower type and click the grid
 2. **Start Wave** — Click Start Wave or enable Auto Wave
 3. **Earn gold** — Kill enemies to earn gold for more towers
-4. **Sell towers** — Click a tower to select it, then sell to reorganize
-5. **Survive** — Don't let enemies reach G or your health hits 0
+4. **Upgrade towers** — Click a placed tower and hit Upgrade to boost its stats
+5. **Sell towers** — Sell to reorganize; refund is 70% of everything spent
+6. **Survive** — Don't let enemies reach G or your health hits 0
 
 ### Tips
 - Block the path to force enemies on longer routes
 - Snipers cover the whole board — place them early
 - Use Slow towers to keep tanks and bosses in your kill zone longer
 - Splash towers shine at choke points where enemies bunch up
-- Sell and reorganize between waves
+- Upgrade your key towers rather than spreading gold thin
 - Boss enemies appear every 3rd wave from wave 11 onward
 
 ## 🛠️ Tech Stack
@@ -209,6 +223,10 @@ cd server && go run main.go
 - [x] Place all 4 tower types
 - [x] Gold deducts on placement, blocks if insufficient
 - [x] Click tower to select, view stats, sell for refund
+- [x] Upgrade tower — stats increase, gold rings appear, sell price reflects total spent
+- [x] Slow and splash tower upgrades improve special effects
+- [x] Info panel updates immediately on upgrade (no reselect needed)
+- [x] MAX badge appears at level 4, upgrade button disabled
 - [x] Start Wave spawns enemies with delays
 - [x] Wave counter increments on completion
 - [x] Auto Wave countdown and Send Now button
@@ -221,19 +239,20 @@ cd server && go run main.go
 - [x] Slow tower visibly slows enemies (blue tint)
 - [x] Splash tower AOE damages nearby enemies
 - [x] Enemy health and speed scale with wave number
+- [x] Fast forward mode compresses to 3x speed across all game systems
 
 ## 🐛 Known Issues
 
-- No tower upgrade system yet
 - No score system yet
+- Special upgrade stats (slow duration, splash radius) not shown in info panel
 - No sound effects
 
 ## 🚀 Future Plans
 
 ### Short Term
 - Score system (points per kill + wave bonuses)
-- Tower upgrades (levels 1-3)
 - Enemy glossary and wave preview panel
+- Special stat display in upgrade panel
 
 ### Medium Term
 - Sound effects and background music
@@ -265,4 +284,4 @@ MIT License
 
 ---
 
-**Built with** 🐹 Go and ⚛️ React | **Status**: Phase 12 Complete ✅ | **Last Updated**: April 22, 2026
+**Built with** 🐹 Go and ⚛️ React | **Status**: Phase 13 Complete ✅ | **Last Updated**: April 22, 2026

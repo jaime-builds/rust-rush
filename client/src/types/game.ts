@@ -18,6 +18,11 @@ export interface Tower {
   cooldown?: number
   rotation?: number
   current_target?: number
+  total_spent?: number
+  slow_duration_upgrade?: number
+  slow_multiplier_upgrade?: number
+  aoe_radius_upgrade?: number
+  aoe_damage_pct_upgrade?: number
 }
 
 export interface Enemy {
