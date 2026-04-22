@@ -256,7 +256,7 @@ func (c *Client) handleMessage(msg *Message) {
 		}
 
 		if len(path) > 0 {
-			enemy := room.AddEnemy(enemyType, path)
+			enemy := room.AddEnemy(enemyType, path, 1) // wave 1 = unscaled stats for debug spawns
 			log.Printf("Spawned %s enemy with ID %d in room %s", enemyType, enemy.ID, roomID)
 
 			// Broadcast updated state

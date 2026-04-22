@@ -240,7 +240,7 @@ func (m *Manager) SpawnWave(roomID string) {
 			currentPath := room.FindPathFromSpawn()
 			if currentPath != nil {
 				path = currentPath
-				room.AddEnemy(group.EnemyType, path)
+				room.AddEnemy(group.EnemyType, path, waveNum)
 				log.Printf("👾 Spawned %s enemy (%d/%d) in wave %d", group.EnemyType, i+1, group.Count, waveNum)
 			} else {
 				log.Printf("⚠️ Path blocked, skipping enemy %d/%d in wave %d", i+1, group.Count, waveNum)

@@ -109,13 +109,19 @@
 
 ## 🚧 In Progress / Next Up
 
-### Phase 12: Difficulty & Economy Balancing
-- [ ] Enemy health scales more aggressively past wave 10
-- [ ] Enemy count ramp adjusted (currently too easy)
-- [ ] Gold rewards reviewed (players accumulate too fast)
-- [ ] Boss enemies appear more frequently at high waves
-- [ ] Spawn delay floors lowered for higher waves
-- [ ] Playtesting targets: game over by wave 20-30 without good strategy
+### Phase 12: Difficulty & Economy Balancing ✅ **NEW!**
+- [x] Enemy health scales with wave number (+10% compound per wave above wave 5)
+- [x] Enemy speed scales with wave number (+3% compound per wave above wave 5, capped at +80%)
+- [x] Enemy count ramp adjusted — quadratic growth past wave 10
+- [x] Boss frequency increased (every 3rd wave from wave 11, was every 5th)
+- [x] Boss spawn delay scales down at higher waves
+- [x] Spawn delay floor lowered to 0.25s (was 0.4s)
+- [x] Slow tower actually slows enemies (60% speed reduction for 2s, refreshable)
+- [x] Slowed enemies render blue with ring indicator
+- [x] Splash tower deals real AOE damage (1.5 unit radius, 60% damage to nearby enemies)
+- [x] Splash projectiles render orange and larger to distinguish from basic
+- [x] AOE explosions render at full splash radius so effect is visible
+- [x] Playtesting target met: average player struggles around wave 20
 
 ### Phase 13: Tower Sell & Upgrades
 - [x] Sell tower (70% refund) ✅
@@ -298,10 +304,40 @@
 - Stable across 55+ waves ✅
 
 ### Known Issues to Address Next
-- Difficulty does not scale aggressively enough — players can reach wave 55+ with $67k gold
-- Economy needs rebalancing (gold accumulates faster than it can be spent)
+- Tower upgrades not yet implemented (Phase 13)
+- No score system yet (Phase 14)
+- No sound
 
 ---
 
-**Last Updated**: April 21, 2026
-**Status**: Phase 11 Complete ✅ | Alpha Complete! 🎉 | Moving to Phase 12 (Difficulty & Economy Balancing) 🚧
+## 🎉 Recent Achievements (April 22, 2026)
+
+### Phase 12 — Difficulty & Economy Balancing
+
+1. **Enemy Scaling**
+   - Health: +10% compound per wave above wave 5 (wave 10 = 1.6x, wave 20 = 2.6x base)
+   - Speed: +3% compound per wave above wave 5, capped at +80% of base
+   - Count: quadratic growth past wave 10 so late waves feel like a flood
+   - Boss frequency: every 3rd wave from wave 11 (was every 5th)
+   - Spawn delay floors at 0.25s (was 0.4s)
+
+2. **Slow Tower**
+   - Now applies a real 60% speed debuff for 2 seconds on hit
+   - Hitting a slowed enemy refreshes the duration rather than stacking
+   - Slowed enemies render blue with a light ring — visually readable at a glance
+
+3. **Splash Tower**
+   - Now deals true AOE damage: full damage to primary target, 60% to all enemies within 1.5 units
+   - Splash projectiles render orange (matching tower color) and slightly larger
+   - AOE explosions scale to the full splash radius so the effect is visible
+
+### Playtesting Results
+- Wave 20 reached with 40 health remaining and 66 enemies incoming ✅
+- Economy stays tight at wave 20 ($165 gold) ✅
+- 120 towers placed — density costs health rather than guaranteeing a win ✅
+- All 4 tower types now have distinct, meaningful roles ✅
+
+---
+
+**Last Updated**: April 22, 2026
+**Status**: Phase 12 Complete ✅ | Moving to Phase 13 (Tower Upgrades) 🚧

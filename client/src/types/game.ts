@@ -27,6 +27,8 @@ export interface Enemy {
   health: number
   max_health: number
   speed: number
+  slow_duration?: number
+  slow_multiplier?: number
   path?: Position[]
   path_index?: number
 }
@@ -38,6 +40,9 @@ export interface Projectile {
   speed: number
   damage: number
   tower_id: number
+  is_aoe?: boolean
+  aoe_radius?: number
+  aoe_damage?: number
 }
 
 export interface MuzzleFlash {

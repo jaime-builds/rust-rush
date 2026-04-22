@@ -23,13 +23,14 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 - **Game Over & New Game** — Full reset flow with a single click
 
 #### Visual Effects
-- **Projectile System** — Bullets with glowing trails fly toward enemies
+- **Projectile System** — Bullets with glowing trails fly toward enemies; splash projectiles render orange
 - **Muzzle Flashes** — 100ms flash when towers fire
-- **Explosion Effects** — 300ms animated explosions on hit
+- **Explosion Effects** — Animated explosions on hit; AOE hits show full blast radius
 - **Health Bars** — Real-time above each enemy
 - **Tower Rotation** — Towers rotate to face their current target
 - **Range Indicators** — Dashed circles show range when a tower is selected
 - **Tower Selection Highlight** — White ring marks the selected tower
+- **Slow Visual** — Slowed enemies render blue with a ring indicator
 
 #### Game Flow
 - **Auto Wave Toggle** — Automatically starts the next wave after a 5s countdown
@@ -48,21 +49,23 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 
 ### Tower Types
 
-| Tower    | Cost | Range | Damage | Fire Rate | Best For               |
-|----------|------|-------|--------|-----------|------------------------|
-| 🗼 Basic  | $50  | 3.0   | 15     | 1.0/sec   | All-around defense     |
-| 🎯 Sniper | $100 | 6.0   | 50     | 0.5/sec   | Long-range, high damage|
-| 💥 Splash | $75  | 2.5   | 10     | 1.5/sec   | Fast firing            |
-| ❄️ Slow   | $60  | 3.5   | 8      | 0.8/sec   | Consistent damage      |
+| Tower    | Cost | Range | Damage | Fire Rate | Special                        |
+|----------|------|-------|--------|-----------|--------------------------------|
+| 🗼 Basic  | $50  | 3.0   | 15     | 1.0/sec   | Reliable all-rounder           |
+| 🎯 Sniper | $100 | 6.0   | 50     | 0.5/sec   | Long-range, high single-target |
+| 💥 Splash | $75  | 2.5   | 10     | 1.5/sec   | AOE: 60% damage in 1.5u radius |
+| ❄️ Slow   | $60  | 3.5   | 8      | 0.8/sec   | 60% speed reduction for 2s     |
 
 ### Enemy Types
 
-| Type    | Health | Speed | Gold | Appears  |
-|---------|--------|-------|------|----------|
-| 🦀 Basic | 100    | 2.0   | +10  | Wave 1+  |
-| 💨 Fast  | 50     | 4.0   | +8   | Wave 4+  |
-| 🛡️ Tank  | 300    | 1.0   | +25  | Wave 7+  |
-| 💀 Boss  | 1000   | 0.5   | +100 | Wave 11+ |
+| Type     | Health | Speed | Gold | Appears  |
+|----------|--------|-------|------|----------|
+| 🦀 Basic  | 100    | 2.0   | +10  | Wave 1+  |
+| 💨 Fast   | 50     | 4.0   | +8   | Wave 4+  |
+| 🛡️ Tank   | 300    | 1.0   | +25  | Wave 7+  |
+| 💀 Boss   | 1000   | 0.5   | +100 | Wave 11+ |
+
+Both health and speed scale with wave number — enemies get meaningfully tougher past wave 5.
 
 ### Wave Progression
 
@@ -71,10 +74,9 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 | 1–3   | Basic only (5–9 enemies) |
 | 4–6   | Basic + Fast |
 | 7–10  | Basic + Fast + Tank |
-| 11+   | Full mix + Boss every 5th wave, scaling counts |
+| 11+   | Full mix + Boss every 3rd wave, counts scale quadratically |
 
 ### 🚧 Coming Next
-- Difficulty & economy balancing
 - Score system
 - Tower upgrades (levels 1-3)
 - Enemy glossary & wave preview
@@ -146,8 +148,10 @@ Client starts on `http://localhost:5173`
 ### Tips
 - Block the path to force enemies on longer routes
 - Snipers cover the whole board — place them early
+- Use Slow towers to keep tanks and bosses in your kill zone longer
+- Splash towers shine at choke points where enemies bunch up
 - Sell and reorganize between waves
-- Boss enemies appear every 5th wave after wave 10
+- Boss enemies appear every 3rd wave from wave 11 onward
 
 ## 🛠️ Tech Stack
 
@@ -214,17 +218,19 @@ cd server && go run main.go
 - [x] Game Over screen appears at 0 health
 - [x] New Game resets everything in one click
 - [x] New Game mid-wave cancels spawn goroutine
+- [x] Slow tower visibly slows enemies (blue tint)
+- [x] Splash tower AOE damages nearby enemies
+- [x] Enemy health and speed scale with wave number
 
 ## 🐛 Known Issues
 
-- Difficulty scaling plateaus — experienced players can reach wave 50+ without losing
-- Gold accumulates faster than it can be spent at higher waves
-- Tower sell/upgrade UI could be more polished
+- No tower upgrade system yet
+- No score system yet
+- No sound effects
 
 ## 🚀 Future Plans
 
 ### Short Term
-- Difficulty & economy rebalancing
 - Score system (points per kill + wave bonuses)
 - Tower upgrades (levels 1-3)
 - Enemy glossary and wave preview panel
@@ -259,4 +265,4 @@ MIT License
 
 ---
 
-**Built with** 🐹 Go and ⚛️ React | **Status**: Alpha Complete! 🎉 | **Last Updated**: April 21, 2026
+**Built with** 🐹 Go and ⚛️ React | **Status**: Phase 12 Complete ✅ | **Last Updated**: April 22, 2026
