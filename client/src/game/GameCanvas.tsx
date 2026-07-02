@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './GameCanvas.css'
 import { Tower, TowerType, Enemy, GameState, TOWER_COSTS } from '../types/game'
 
@@ -44,6 +44,43 @@ const TOWER_LABELS: Record<string, string> = {
   slow: '❄️ Slow',
 }
 
+// Single source of truth for enemy colors — used by both canvas rendering and the glossary legend
+const ENEMY_COLORS: Record<string, string> = {
+  basic: '#ff4444',
+  fast: '#ff9944',
+  tank: '#994444',
+  flying: '#44ff99',
+  boss: '#ff0000',
+}
+
+const ENEMY_EMOJI: Record<string, string> = {
+  basic: '🦀',
+  fast: '💨',
+  tank: '🛡️',
+  flying: '🕊️',
+  boss: '💀',
+}
+
+// Enemy stat sheet — kept in sync with server getEnemyStats/getEnemyGoldReward/getEnemyScorePoints.
+// 'flying' is omitted: it exists in server stats but never spawns in any wave.
+const ENEMY_GLOSSARY: { type: string, name: string, health: number, speed: number, gold: number, score: number, appears: string }[] = [
+  { type: 'basic', name: 'Basic', health: 100, speed: 2.0, gold: 10, score: 10, appears: 'Wave 1+' },
+  { type: 'fast', name: 'Fast', health: 50, speed: 4.0, gold: 8, score: 15, appears: 'Wave 4+' },
+  { type: 'tank', name: 'Tank', health: 300, speed: 1.0, gold: 25, score: 30, appears: 'Wave 7+' },
+  { type: 'boss', name: 'Boss', health: 1000, speed: 0.5, gold: 100, score: 100, appears: 'Wave 11+' },
+]
+
+const HIGH_SCORE_KEY = 'rustRushHighScore'
+
+const readHighScore = (): number => {
+  try {
+    const parsed = parseInt(localStorage.getItem(HIGH_SCORE_KEY) ?? '0', 10)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+  } catch {
+    return 0
+  }
+}
+
 const GameCanvas = ({
   isConnected,
   onPlaceTower,
@@ -67,7 +104,11 @@ const GameCanvas = ({
   const [selectedTower, setSelectedTower] = useState<Tower | null>(null)
   const [autoWave, setAutoWave] = useState(false)
   const [countdown, setCountdown] = useState<number | null>(null)
-  const countdownRef = useRef<NodeJS.Timeout | null>(null)
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [highScore, setHighScore] = useState<number>(() => readHighScore())
+  const [isNewHighScore, setIsNewHighScore] = useState(false)
+  const prevPhaseRef = useRef<string>('waiting')
+  const [showGlossary, setShowGlossary] = useState(false)
 
   // Sync refs
   gameStateRef.current = gameState
@@ -108,6 +149,29 @@ const GameCanvas = ({
       setCountdown(null)
     }
   }, [isWaveActive, isGameOver])
+
+  // Persist high score on the transition into game over
+  useEffect(() => {
+    if (phase === 'game_over' && prevPhaseRef.current !== 'game_over') {
+      const finalScore = gameState?.score ?? 0
+      if (finalScore > highScore) {
+        setHighScore(finalScore)
+        setIsNewHighScore(true)
+        try {
+          localStorage.setItem(HIGH_SCORE_KEY, String(finalScore))
+        } catch {
+          // localStorage unavailable (private mode) — high score just won't persist
+        }
+      } else {
+        setIsNewHighScore(false)
+      }
+    } else if (phase !== 'game_over' && prevPhaseRef.current === 'game_over') {
+      // Clear on leaving game over so a later, lower-scoring run can't paint
+      // a stale "New High Score!" frame before the effect re-evaluates.
+      setIsNewHighScore(false)
+    }
+    prevPhaseRef.current = phase
+  }, [phase])
 
   // Deselect tower if it no longer exists (was sold or cleared)
   // Also sync selected tower stats when server broadcasts an update (e.g. after upgrade)
@@ -316,16 +380,13 @@ const GameCanvas = ({
   const drawEnemy = (ctx: CanvasRenderingContext2D, enemy: Enemy) => {
     const x = enemy.position.x * CELL_SIZE + CELL_SIZE / 2
     const y = enemy.position.y * CELL_SIZE + CELL_SIZE / 2
-    const colors: Record<string, string> = {
-      basic: '#ff4444', fast: '#ff9944', tank: '#994444', flying: '#44ff99', boss: '#ff0000'
-    }
     const sizes: Record<string, number> = {
       basic: CELL_SIZE / 4, fast: CELL_SIZE / 5, tank: CELL_SIZE / 2.5, flying: CELL_SIZE / 4.5, boss: CELL_SIZE / 2
     }
     const size = sizes[enemy.enemy_type] || CELL_SIZE / 4
     const isSlowed = (enemy.slow_duration ?? 0) > 0
 
-    ctx.fillStyle = isSlowed ? '#42A5F5' : (colors[enemy.enemy_type] || '#ff4444')
+    ctx.fillStyle = isSlowed ? '#42A5F5' : (ENEMY_COLORS[enemy.enemy_type] || '#ff4444')
     ctx.beginPath()
     ctx.arc(x, y, size, 0, Math.PI * 2)
     ctx.fill()
@@ -522,9 +583,21 @@ const GameCanvas = ({
         }}>
           <div style={{ fontSize: '64px', marginBottom: '16px' }}>💀</div>
           <h2 style={{ color: '#ff4444', fontSize: '36px', margin: '0 0 8px 0' }}>Game Over</h2>
-          <p style={{ color: '#ccc', fontSize: '18px', margin: '0 0 24px 0' }}>
+          <p style={{ color: '#ccc', fontSize: '18px', margin: '0 0 8px 0' }}>
             You survived {(gameState?.wave ?? 1) - 1} wave{(gameState?.wave ?? 1) - 1 !== 1 ? 's' : ''}
           </p>
+          <p style={{ color: '#FFD700', fontSize: '24px', fontWeight: 'bold', margin: '0 0 4px 0' }}>
+            ⭐ Score: {(gameState?.score ?? 0).toLocaleString()}
+          </p>
+          {isNewHighScore ? (
+            <p style={{ color: '#FFD700', fontSize: '18px', margin: '0 0 24px 0' }}>
+              🏆 New High Score!
+            </p>
+          ) : (
+            <p style={{ color: '#ccc', fontSize: '15px', margin: '0 0 24px 0' }}>
+              🏆 Best: {highScore.toLocaleString()}
+            </p>
+          )}
           <button onClick={onNewGame} style={{
             padding: '14px 32px', fontSize: '18px', fontWeight: 'bold',
             background: '#4CAF50', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer',
@@ -537,6 +610,8 @@ const GameCanvas = ({
       <div className="game-info">
         <div className="info-item">💰 Gold: <strong>${gold}</strong></div>
         <div className="info-item">❤️ Health: <strong style={{ color: (gameState?.health ?? 100) <= 30 ? '#ff4444' : undefined }}>{gameState?.health ?? 100}</strong></div>
+        <div className="info-item">⭐ Score: <strong>{(gameState?.score ?? 0).toLocaleString()}</strong></div>
+        <div className="info-item">🏆 Best: <strong>{highScore.toLocaleString()}</strong></div>
         <div className="info-item">🌊 Wave: <strong>{gameState?.wave ?? 1}</strong></div>
         <div className="info-item">🔌 Server: <strong className={isConnected ? 'connected' : 'disconnected'}>{isConnected ? 'Connected' : 'Disconnected'}</strong></div>
       </div>
@@ -544,6 +619,31 @@ const GameCanvas = ({
       <div style={{ textAlign: 'center', margin: '6px 0', fontSize: '14px', minHeight: '24px' }}>
         {waveStatusLabel()}
       </div>
+
+      {!isGameOver && (gameState?.wave_preview?.length ?? 0) > 0 && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '16px',
+          fontSize: '13px',
+          background: 'rgba(255,255,255,0.06)',
+          padding: '6px 18px',
+          borderRadius: '6px',
+        }}>
+          <span style={{ color: '#888' }}>{isWaveActive ? '⚔️ This wave:' : '🌊 Next wave:'}</span>
+          {gameState!.wave_preview!.map(entry => (
+            <span key={entry.enemy_type} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+              <span style={{
+                width: '10px', height: '10px', borderRadius: '50%',
+                background: ENEMY_COLORS[entry.enemy_type] || '#ff4444',
+                display: 'inline-block',
+              }} />
+              {ENEMY_EMOJI[entry.enemy_type] || '👾'} <strong>×{entry.count}</strong>
+            </span>
+          ))}
+        </div>
+      )}
 
       <div className="tower-selection">
         {towerButtons.map(({ type, icon, label }) => {
@@ -702,12 +802,73 @@ const GameCanvas = ({
         >
           🔄 New Game
         </button>
+        <button
+          className="btn"
+          onClick={() => setShowGlossary(prev => !prev)}
+          style={{
+            background: showGlossary ? '#7B1FA2' : '#555',
+            color: 'white',
+            border: showGlossary ? '2px solid #BA68C8' : '2px solid transparent',
+          }}
+          title="Enemy types, stats, and rewards"
+        >
+          📖 Glossary
+        </button>
         {showDebug && (
           <button className="btn" style={{ background: '#555' }} onClick={onSpawnEnemy} disabled={!isConnected}>
             🦀 Spawn Test
           </button>
         )}
       </div>
+
+      {showGlossary && (
+        <div style={{
+          background: '#2a2a2a',
+          padding: '14px 24px',
+          borderRadius: '8px',
+          maxWidth: '640px',
+        }}>
+          <div style={{ fontWeight: 'bold', fontSize: '15px', marginBottom: '10px', textAlign: 'center' }}>
+            📖 Enemy Glossary
+          </div>
+          <table style={{ borderCollapse: 'collapse', fontSize: '13px', width: '100%' }}>
+            <thead>
+              <tr style={{ color: '#888', textAlign: 'left' }}>
+                <th style={{ padding: '4px 14px 4px 0' }}>Enemy</th>
+                <th style={{ padding: '4px 14px 4px 0' }}>❤️ HP</th>
+                <th style={{ padding: '4px 14px 4px 0' }}>👟 Speed</th>
+                <th style={{ padding: '4px 14px 4px 0' }}>💰 Gold</th>
+                <th style={{ padding: '4px 14px 4px 0' }}>⭐ Score</th>
+                <th style={{ padding: '4px 0' }}>Appears</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ENEMY_GLOSSARY.map(enemy => (
+                <tr key={enemy.type} style={{ borderTop: '1px solid #3a3a3a' }}>
+                  <td style={{ padding: '6px 14px 6px 0' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+                      <span style={{
+                        width: '12px', height: '12px', borderRadius: '50%',
+                        background: ENEMY_COLORS[enemy.type],
+                        display: 'inline-block',
+                      }} />
+                      {ENEMY_EMOJI[enemy.type]} <strong>{enemy.name}</strong>
+                    </span>
+                  </td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>{enemy.health}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>{enemy.speed}</td>
+                  <td style={{ padding: '6px 14px 6px 0', color: '#ffd700' }}>+{enemy.gold}</td>
+                  <td style={{ padding: '6px 14px 6px 0', color: '#ffd700' }}>{enemy.score}×wave</td>
+                  <td style={{ padding: '6px 0' }}>{enemy.appears}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ color: '#888', fontSize: '12px', marginTop: '8px', fontStyle: 'italic' }}>
+            HP and speed scale up with wave number past wave 5. A boss appears every wave from 11 — another joins every 3rd wave (max 6).
+          </div>
+        </div>
+      )}
 
       <div className="info-box">
         <p>

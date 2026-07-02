@@ -4,7 +4,12 @@ import GameCanvas from './game/GameCanvas'
 import { useWebSocket } from './hooks/useWebSocket'
 import { GameState, Position } from './types/game'
 
-const WS_URL = 'ws://localhost:8080/ws'
+// Dev: Vite serves the client on 5173, Go server runs separately on 8080.
+// Production build: the Go server serves the client itself, so derive the
+// WebSocket URL from wherever the page was loaded from.
+const WS_URL = import.meta.env.DEV
+  ? 'ws://localhost:8080/ws'
+  : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
 const ROOM_ID = 'game-1'
 const GRID_WIDTH = 20
 const GRID_HEIGHT = 15
@@ -17,6 +22,7 @@ const defaultGameState: GameState = {
   explosions: [],
   gold: 200,
   health: 100,
+  score: 0,
   wave: 1,
   phase: 'waiting',
   enemies_remaining: 0,
@@ -228,6 +234,7 @@ function App() {
               <div>💥 Projectiles: {gameState.projectiles?.length ?? 0}</div>
               <div>💰 Gold: {gameState.gold ?? 0}</div>
               <div>❤️ Health: {gameState.health ?? 0}</div>
+              <div>⭐ Score: {gameState.score ?? 0}</div>
               <div>🌊 Wave: {gameState.wave}</div>
               <div>👾 Remaining: {gameState.enemies_remaining}</div>
             </div>

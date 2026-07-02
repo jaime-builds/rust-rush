@@ -139,25 +139,25 @@
 - [x] FF button in header, orange when active, resets on New Game
 - [x] Removed Clear All button (redundant with New Game + Sell)
 
-### Phase 14: Health & Scoring
+### Phase 14: Health & Scoring ✅
 - [x] Health reduction when enemy reaches goal ✅
 - [x] Game over screen ✅
-- [ ] Score system (points per kill, scaled by enemy type and wave)
-- [ ] Wave completion bonus (full health = multiplier)
-- [ ] Score display during game and on game over screen
-- [ ] High score tracking (local)
+- [x] Score system (points per kill, scaled by enemy type and wave)
+- [x] Wave completion bonus (full health = 2x multiplier)
+- [x] Score display during game and on game over screen
+- [x] High score tracking (local, persists in browser localStorage)
 
-### Phase 15: Enemy Glossary & Wave Preview
-- [ ] Enemy stat sheet (type, HP, speed, gold reward)
-- [ ] Wave preview panel showing upcoming enemy composition
-- [ ] Enemy visual legend (color → type mapping)
+### Phase 15: Enemy Glossary & Wave Preview ✅
+- [x] Enemy stat sheet (type, HP, speed, gold reward, score)
+- [x] Wave preview panel showing upcoming enemy composition (server-provided)
+- [x] Enemy visual legend (color → type mapping, shared with canvas renderer)
 
-### Phase 16: Local Production Build
-- [ ] Build React app to static files (`npm run build`)
-- [ ] Go server serves static files from `client/dist`
-- [ ] Single binary, single port (8080), no Vite dev server needed
-- [ ] One terminal to run the whole game locally
-- [ ] Update README with production run instructions
+### Phase 16: Local Production Build ✅
+- [x] Build React app to static files (`npm run build`)
+- [x] Go server serves static files from `client/dist`
+- [x] Single binary, single port (8080), no Vite dev server needed
+- [x] One terminal to run the whole game locally
+- [x] Update README with production run instructions
 
 ---
 
@@ -267,12 +267,12 @@
 - [x] Auto wave
 
 ### Beta Release (Next Target)
-- [ ] Score system
-- [ ] Tower upgrades ✅
+- [x] Score system ✅
+- [x] Tower upgrades ✅
 - [ ] Sound effects
-- [ ] Enemy glossary / wave preview
-- [ ] High score tracking
-- [ ] Local production build (one terminal)
+- [x] Enemy glossary / wave preview ✅
+- [x] High score tracking ✅
+- [x] Local production build (one terminal) ✅
 
 ### Full Release
 - [ ] Public deployment (shareable link)
@@ -329,7 +329,6 @@
 - Stable across 55+ waves ✅
 
 ### Known Issues to Address Next
-- No score system yet (Phase 14)
 - No tower upgrade UI for special stats (slow duration, splash radius not shown in panel)
 - No sound
 
@@ -381,5 +380,35 @@
 
 ---
 
-**Last Updated**: April 22, 2026
-**Status**: Phase 13 Complete ✅ | Moving to Phase 14 (Score System) 🚧
+## 🎉 Recent Achievements (July 1, 2026)
+
+### Phase 14 — Score System
+
+1. **Scoring**
+   - Kill points = base points × wave number (basic 10, fast 15, tank 30, boss 100)
+   - Wave completion bonus = 50 × wave, doubled when finishing at full health
+   - Score is server-authoritative, rides the existing game_state broadcast
+
+2. **High Score**
+   - Best score persists in browser localStorage
+   - Game Over screen shows final score and "New High Score!" when beaten
+   - ⭐ Score and 🏆 Best always visible in the info bar
+
+### Phase 15 — Enemy Glossary & Wave Preview
+
+1. **Wave Preview** — server includes next/current wave composition in every
+   snapshot; client shows it as a strip with color dots + counts
+2. **Glossary** — toggleable panel with per-enemy color legend, HP, speed,
+   gold, score, and first-appearance wave; colors shared with the canvas renderer
+
+### Phase 16 — Local Production Build
+
+- `npm run build` → `client/dist`, Go server serves it on port 8080
+- One terminal runs the whole game; WS URL derived from page location in prod
+- Works via `go run main.go` (from `server/`) or a built binary from the repo root
+- Fixed pre-existing tsc errors that had broken `npm run build`
+
+---
+
+**Last Updated**: July 1, 2026
+**Status**: Phase 16 Complete ✅ | Next: sound, special towers, deployment (Phases 17+) 🚧

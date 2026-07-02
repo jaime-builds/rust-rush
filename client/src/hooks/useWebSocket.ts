@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
-export type MessageType = 
+export type MessageType =
   | 'join_room'
   | 'leave_room'
   | 'game_state'
   | 'place_tower'
   | 'remove_tower'
+  | 'upgrade_tower'
+  | 'set_speed'
   | 'start_wave'
   | 'pause_game'
   | 'spawn_enemy'
+  | 'new_game'
   | 'clear_all'
 
 export interface WebSocketMessage {
@@ -30,7 +33,7 @@ export const useWebSocket = (url: string) => {
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null)
   
   const wsRef = useRef<WebSocket | null>(null)
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectAttemptsRef = useRef(0)
   const maxReconnectAttempts = 5
 

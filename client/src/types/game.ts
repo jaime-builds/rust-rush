@@ -63,6 +63,11 @@ export interface Explosion {
   radius: number
 }
 
+export interface WavePreviewEntry {
+  enemy_type: EnemyType
+  count: number
+}
+
 export interface GameState {
   room_id?: string
   players?: string[]
@@ -73,12 +78,14 @@ export interface GameState {
   explosions: Explosion[]
   gold: number
   health: number
+  score: number
   wave: number
   phase: GamePhase
   enemies_remaining: number
   game_time: number
   spawn_point?: Position
   goal_point?: Position
+  wave_preview?: WavePreviewEntry[]
 }
 
 // Tower costs — kept in sync with server

@@ -150,6 +150,9 @@ type Enemy struct {
 	SlowMultiplier float64   `json:"slow_multiplier"`
 	Path          []Position `json:"path,omitempty"`
 	PathIndex     int        `json:"path_index"`
+	// SpawnWave is the wave this enemy spawned in — used for kill scoring so
+	// debug-spawned enemies (wave-1 stats) don't score at the current wave.
+	SpawnWave int `json:"-"`
 }
 
 // Projectile represents a bullet/missile
@@ -180,6 +183,12 @@ type Explosion struct {
 	Radius   float64  `json:"radius"`
 }
 
+// WavePreviewEntry summarizes one enemy group of a wave for the client UI
+type WavePreviewEntry struct {
+	EnemyType string `json:"enemy_type"`
+	Count     int    `json:"count"`
+}
+
 // GameStateWithShooting is the main game state
 type GameStateWithShooting struct {
 	RoomID           string        `json:"room_id"`
@@ -191,6 +200,7 @@ type GameStateWithShooting struct {
 	Explosions       []Explosion   `json:"explosions"`
 	Gold             int           `json:"gold"`
 	Health           int           `json:"health"`
+	Score            int           `json:"score"`
 	Wave             int           `json:"wave"`
 	Phase            GamePhase     `json:"phase"`
 	EnemiesRemaining int           `json:"enemies_remaining"`
@@ -199,6 +209,10 @@ type GameStateWithShooting struct {
 	SpeedMultiplier  float64       `json:"speed_multiplier"`
 	SpawnPoint       *Position     `json:"spawn_point,omitempty"`
 	GoalPoint        *Position     `json:"goal_point,omitempty"`
+	// WavePreview describes the composition of wave `Wave` — the upcoming wave
+	// during the waiting phase, the in-flight wave during the active phase.
+	// Only populated on snapshots.
+	WavePreview      []WavePreviewEntry `json:"wave_preview,omitempty"`
 	mu               sync.RWMutex
 	nextTowerID      int
 	nextEnemyID      int
@@ -218,6 +232,7 @@ func NewGameStateWithShooting(roomID string) *GameStateWithShooting {
 		Explosions:       make([]Explosion, 0),
 		Gold:             200,
 		Health:           100,
+		Score:            0,
 		Wave:             1,
 		Phase:            PhaseWaiting,
 		EnemiesRemaining: 0,
@@ -246,6 +261,7 @@ func (gs *GameStateWithShooting) Reset() {
 	gs.Explosions = make([]Explosion, 0)
 	gs.Gold = 200
 	gs.Health = 100
+	gs.Score = 0
 	gs.Wave = 1
 	gs.Phase = PhaseWaiting
 	gs.EnemiesRemaining = 0
@@ -273,15 +289,23 @@ func (gs *GameStateWithShooting) Update(deltaTime float64) {
 	gs.updateEnemies(deltaTime)
 	gs.updateEffects(deltaTime)
 
-	if gs.Phase == PhaseActive && len(gs.Enemies) == 0 && gs.EnemiesRemaining == 0 {
-		gs.Projectiles = make([]Projectile, 0)
-		gs.Phase = PhaseWaiting
-		gs.Wave++
-	}
-
+	// Game over check runs before wave completion: if the final leaked enemy
+	// drops health to 0, the run is over — no completion bonus, no wave advance.
 	if gs.Health <= 0 {
 		gs.Health = 0
 		gs.Phase = PhaseGameOver
+	}
+
+	if gs.Phase == PhaseActive && len(gs.Enemies) == 0 && gs.EnemiesRemaining == 0 {
+		gs.Projectiles = make([]Projectile, 0)
+		gs.Phase = PhaseWaiting
+		// Wave completion bonus, doubled for finishing at full health
+		bonus := 50 * gs.Wave
+		if gs.Health >= 100 {
+			bonus *= 2
+		}
+		gs.Score += bonus
+		gs.Wave++
 	}
 }
 
@@ -474,6 +498,7 @@ func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
 
 		if enemy.Health <= 0 {
 			gs.Gold += getEnemyGoldReward(enemy.EnemyType)
+			gs.Score += getEnemyScorePoints(enemy.EnemyType) * enemy.SpawnWave
 			continue
 		}
 
@@ -682,6 +707,7 @@ func (gs *GameStateWithShooting) AddEnemy(enemyType string, path []Position, wav
 		Speed:     speed,
 		Path:      path,
 		PathIndex: 0,
+		SpawnWave: wave,
 	}
 
 	gs.Enemies = append(gs.Enemies, enemy)
@@ -765,12 +791,14 @@ func (gs *GameStateWithShooting) GetSnapshot() *GameStateWithShooting {
 		Explosions:       make([]Explosion, len(gs.Explosions)),
 		Gold:             gs.Gold,
 		Health:           gs.Health,
+		Score:            gs.Score,
 		Wave:             gs.Wave,
 		Phase:            gs.Phase,
 		EnemiesRemaining: gs.EnemiesRemaining,
 		GameTime:         gs.GameTime,
 		SpawnPoint:       gs.SpawnPoint,
 		GoalPoint:        gs.GoalPoint,
+		WavePreview:      buildWavePreview(gs.Wave),
 	}
 
 	copy(snapshot.Players, gs.Players)
@@ -846,6 +874,33 @@ func getEnemyStats(enemyType string) enemyStats {
 		return s
 	}
 	return stats["basic"]
+}
+
+// buildWavePreview flattens the wave config into {enemy_type, count} entries for the client
+func buildWavePreview(wave int) []WavePreviewEntry {
+	config := GetWaveConfig(wave)
+	preview := make([]WavePreviewEntry, 0, len(config.Enemies))
+	for _, group := range config.Enemies {
+		preview = append(preview, WavePreviewEntry{EnemyType: group.EnemyType, Count: group.Count})
+	}
+	return preview
+}
+
+// getEnemyScorePoints returns base score points per kill. Multiplied by the
+// wave number when awarded. Values differ from gold rewards on purpose:
+// score rewards difficulty (fast enemies are hard to hit), gold rewards farming.
+func getEnemyScorePoints(enemyType string) int {
+	points := map[string]int{
+		"basic":  10,
+		"fast":   15,
+		"tank":   30,
+		"flying": 20,
+		"boss":   100,
+	}
+	if p, ok := points[enemyType]; ok {
+		return p
+	}
+	return 10
 }
 
 func getEnemyGoldReward(enemyType string) int {

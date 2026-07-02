@@ -21,6 +21,10 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 - **Smart Pathfinding** — Enemies use BFS to navigate around towers in real time
 - **Dynamic Rerouting** — Enemies instantly reroute when towers are placed mid-wave
 - **Health System** — Enemies deal 10 damage when reaching the goal; game ends at 0
+- **Score System** — Points per kill scale with enemy type and wave number; wave completion bonus doubles if you finish at full health
+- **Local High Score** — Best score persists in your browser and shows on the Game Over screen
+- **Enemy Glossary** — In-game stat sheet with color legend, HP, speed, gold, and score per enemy type
+- **Wave Preview** — See the exact enemy composition of the next (or current) wave at a glance
 - **Game Over & New Game** — Full reset flow with a single click
 
 #### Visual Effects
@@ -71,14 +75,20 @@ Sell at any level refunds 70% of total gold spent.
 
 ### Enemy Types
 
-| Type     | Health | Speed | Gold | Appears  |
-|----------|--------|-------|------|----------|
-| 🦀 Basic  | 100    | 2.0   | +10  | Wave 1+  |
-| 💨 Fast   | 50     | 4.0   | +8   | Wave 4+  |
-| 🛡️ Tank   | 300    | 1.0   | +25  | Wave 7+  |
-| 💀 Boss   | 1000   | 0.5   | +100 | Wave 11+ |
+| Type     | Health | Speed | Gold | Score      | Appears  |
+|----------|--------|-------|------|------------|----------|
+| 🦀 Basic  | 100    | 2.0   | +10  | 10 × wave  | Wave 1+  |
+| 💨 Fast   | 50     | 4.0   | +8   | 15 × wave  | Wave 4+  |
+| 🛡️ Tank   | 300    | 1.0   | +25  | 30 × wave  | Wave 7+  |
+| 💀 Boss   | 1000   | 0.5   | +100 | 100 × wave | Wave 11+ |
 
 Both health and speed scale with wave number — enemies get meaningfully tougher past wave 5.
+
+### Scoring
+
+- **Kills**: base points (table above) × current wave number
+- **Wave completion bonus**: 50 × wave — **doubled** if you finish the wave at full health
+- **High score**: best run is saved locally in your browser
 
 ### Wave Progression
 
@@ -87,13 +97,12 @@ Both health and speed scale with wave number — enemies get meaningfully toughe
 | 1–3   | Basic only (5–9 enemies) |
 | 4–6   | Basic + Fast |
 | 7–10  | Basic + Fast + Tank |
-| 11+   | Full mix + Boss every 3rd wave, counts scale quadratically |
+| 11+   | Full mix + bosses every wave (one more boss every 3rd wave, max 6), counts scale quadratically |
 
 ### 🚧 Coming Next
-- Score system
-- Enemy glossary & wave preview
 - Sound effects
 - Special stat display in upgrade panel (slow duration, splash radius)
+- Special towers (freeze, tesla, mortar, laser)
 
 ## 🏗️ Architecture
 
@@ -124,7 +133,7 @@ Both health and speed scale with wave number — enemies get meaningfully toughe
 - **Go** (1.21+): https://go.dev/dl/
 - **Node.js** (18+): https://nodejs.org
 
-### Quick Start
+### Quick Start (production — one terminal)
 
 1. **Clone the repository**
 ```bash
@@ -132,23 +141,45 @@ git clone https://github.com/jaime-builds/rust-rush.git
 cd rust-rush
 ```
 
-2. **Start the Go server**
+2. **Build the client** (one-time, and after client changes)
 ```bash
-cd server
+cd client
+npm install
+npm run build
+```
+This outputs static files to `client/dist`.
+
+3. **Run the server** — it serves the built client automatically
+```bash
+cd ../server
 go mod download
 go run main.go
 ```
-Server starts on `http://localhost:8080`
 
-3. **Start the React client** (new terminal)
+4. **Open your browser** at http://localhost:8080 — that's it, one process on one port.
+
+> Prefer a standalone binary? `cd server && go build -o rust-rush.exe .` and run it
+> from either the repo root or `server/` — it finds `client/dist` from both.
+> `STATIC_DIR` overrides the location if you move the build elsewhere.
+
+### Development mode (hot reload)
+
+1. **Start the Go server**
+```bash
+cd server
+go run main.go
+```
+Server starts on `http://localhost:8080` (API-only if `client/dist` doesn't exist)
+
+2. **Start the React client** (new terminal)
 ```bash
 cd client
 npm install
 npm run dev
 ```
-Client starts on `http://localhost:5173`
+Client starts on `http://localhost:5173` with hot reload
 
-4. **Open your browser** at http://localhost:5173
+3. **Open your browser** at http://localhost:5173
 
 ## 🎯 How to Play
 
@@ -165,7 +196,7 @@ Client starts on `http://localhost:5173`
 - Use Slow towers to keep tanks and bosses in your kill zone longer
 - Splash towers shine at choke points where enemies bunch up
 - Upgrade your key towers rather than spreading gold thin
-- Boss enemies appear every 3rd wave from wave 11 onward
+- A boss appears in every wave from 11 onward — and another joins the pack every 3rd wave
 
 ## 🛠️ Tech Stack
 
@@ -240,24 +271,27 @@ cd server && go run main.go
 - [x] Splash tower AOE damages nearby enemies
 - [x] Enemy health and speed scale with wave number
 - [x] Fast forward mode compresses to 3x speed across all game systems
+- [x] Score increases on kills, jumps on wave completion (doubled at full health)
+- [x] High score persists across browser sessions, "New High Score!" on beating it
+- [x] Wave preview shows next wave composition, updates after each wave
+- [x] Glossary panel opens/closes, colors match canvas enemies
+- [x] Production build: `npm run build` + `go run main.go` serves the game on 8080
 
 ## 🐛 Known Issues
 
-- No score system yet
 - Special upgrade stats (slow duration, splash radius) not shown in info panel
 - No sound effects
 
 ## 🚀 Future Plans
 
 ### Short Term
-- Score system (points per kill + wave bonuses)
-- Enemy glossary and wave preview panel
+- Special towers (freeze, tesla, mortar, laser)
 - Special stat display in upgrade panel
 
 ### Medium Term
 - Sound effects and background music
 - Visual polish (animations, background theme)
-- High score leaderboard
+- Online high score leaderboard
 - Speed controls (1x, 2x, 3x)
 
 ### Long Term
@@ -284,4 +318,4 @@ MIT License
 
 ---
 
-**Built with** 🐹 Go and ⚛️ React | **Status**: Phase 13 Complete ✅ | **Last Updated**: April 22, 2026
+**Built with** 🐹 Go and ⚛️ React | **Status**: Phase 16 Complete ✅ | **Last Updated**: July 1, 2026
