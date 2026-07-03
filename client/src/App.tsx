@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import GameCanvas from './game/GameCanvas'
 import { useWebSocket } from './hooks/useWebSocket'
-import { GameState, Position } from './types/game'
+import { GameState } from './types/game'
 
 // Dev: Vite serves the client on 5173, Go server runs separately on 8080.
 // Production build: the Go server serves the client itself, so derive the
@@ -11,8 +11,13 @@ const WS_URL = import.meta.env.DEV
   ? 'ws://localhost:8080/ws'
   : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
 const ROOM_ID = 'game-1'
-const GRID_WIDTH = 20
-const GRID_HEIGHT = 15
+
+// The server broadcasts 60 snapshots/sec. The canvas reads every one through
+// liveStateRef, but React (header, panels, buttons) only needs event-frequency
+// updates, so commits are throttled to this interval with a trailing edge —
+// the newest snapshot always lands within one interval, and phase changes
+// (game over, wave transitions) commit immediately. Set to 0 to disable.
+const UI_UPDATE_INTERVAL_MS = 100
 
 const defaultGameState: GameState = {
   towers: [],
@@ -32,11 +37,15 @@ const defaultGameState: GameState = {
 }
 
 function App() {
-  const { status, lastMessage, sendMessage } = useWebSocket(WS_URL)
+  const { status, subscribe, sendMessage } = useWebSocket(WS_URL)
   const [hasJoined, setHasJoined] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
   const [gameState, setGameState] = useState<GameState>(defaultGameState)
-  const [fastForward, setFastForward] = useState(false)
+
+  // Newest server snapshot, updated on every message for the canvas loop.
+  const liveStateRef = useRef<GameState>(defaultGameState)
+  const lastCommitRef = useRef(0)
+  const pendingCommitRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (status.isConnected && !hasJoined) {
@@ -48,167 +57,140 @@ function App() {
   }, [status.isConnected, hasJoined, sendMessage])
 
   useEffect(() => {
-    if (!lastMessage) return
-
-    if (lastMessage.type === 'join_room') {
-      setHasJoined(true)
-      if (lastMessage.payload?.state) {
-        setGameState(lastMessage.payload.state)
+    const commitNow = () => {
+      if (pendingCommitRef.current) {
+        clearTimeout(pendingCommitRef.current)
+        pendingCommitRef.current = null
       }
+      lastCommitRef.current = Date.now()
+      const incoming = liveStateRef.current
+      setGameState(prev => ({
+        ...incoming,
+        // The server includes spawn/goal in every snapshot; this fallback
+        // only guards the theoretical missing case.
+        spawn_point: incoming.spawn_point || prev.spawn_point,
+        goal_point: incoming.goal_point || prev.goal_point,
+      }))
     }
 
-    if (lastMessage.type === 'game_state') {
-      if (lastMessage.payload?.state) {
-        const incoming = lastMessage.payload.state
-        setGameState({
-          ...incoming,
-          spawn_point: incoming.spawn_point || gameState.spawn_point,
-          goal_point: incoming.goal_point || gameState.goal_point,
-        })
-      }
+    const scheduleTrailingCommit = () => {
+      if (pendingCommitRef.current) return // a pending commit will pick up liveStateRef
+      const elapsed = Date.now() - lastCommitRef.current
+      const delay = Math.max(0, UI_UPDATE_INTERVAL_MS - elapsed)
+      pendingCommitRef.current = setTimeout(() => {
+        pendingCommitRef.current = null
+        commitNow()
+      }, delay)
     }
-  }, [lastMessage])
 
-  const findPath = (start: Position, goal: Position, towers: any[]): Position[] | null => {
-    const blocked = new Set<string>()
-    towers.forEach(t => {
-      const tx = Math.round(t.position.x)
-      const ty = Math.round(t.position.y)
-      blocked.add(`${tx},${ty}`)
+    const unsubscribe = subscribe(message => {
+      if (message.type === 'join_room') {
+        setHasJoined(true)
+        if (message.payload?.state) {
+          liveStateRef.current = message.payload.state
+          commitNow()
+        }
+        return
+      }
+
+      if (message.type === 'game_state' && message.payload?.state) {
+        const incoming: GameState = message.payload.state
+        const phaseChanged = incoming.phase !== liveStateRef.current.phase
+        liveStateRef.current = incoming
+        if (phaseChanged || showDebug || UI_UPDATE_INTERVAL_MS <= 0) {
+          commitNow()
+        } else {
+          scheduleTrailingCommit()
+        }
+      }
     })
 
-    const queue: { pos: Position, path: Position[] }[] = [{ pos: start, path: [start] }]
-    const visited = new Set<string>()
-    visited.add(`${Math.round(start.x)},${Math.round(start.y)}`)
-
-    while (queue.length > 0) {
-      const { pos, path } = queue.shift()!
-
-      const px = Math.round(pos.x)
-      const py = Math.round(pos.y)
-      const gx = Math.round(goal.x)
-      const gy = Math.round(goal.y)
-
-      if (px === gx && py === gy) return path
-
-      const neighbors = [
-        { x: px + 1, y: py },
-        { x: px - 1, y: py },
-        { x: px, y: py + 1 },
-        { x: px, y: py - 1 }
-      ]
-
-      for (const next of neighbors) {
-        const key = `${next.x},${next.y}`
-        if (next.x < 0 || next.x >= GRID_WIDTH || next.y < 0 || next.y >= GRID_HEIGHT) continue
-        if (blocked.has(key) || visited.has(key)) continue
-        visited.add(key)
-        queue.push({ pos: next, path: [...path, next] })
+    return () => {
+      unsubscribe()
+      if (pendingCommitRef.current) {
+        clearTimeout(pendingCommitRef.current)
+        pendingCommitRef.current = null
       }
     }
+  }, [subscribe, showDebug])
 
-    return null
-  }
-
-  const handlePlaceTower = (x: number, y: number, towerType: string) => {
+  // Handlers are useCallback'd so GameCanvas effects can list them as honest
+  // dependencies without re-running on every throttled state commit.
+  const handlePlaceTower = useCallback((x: number, y: number, towerType: string) => {
     if (!hasJoined) return
     sendMessage({
       type: 'place_tower',
       room_id: ROOM_ID,
       payload: { x, y, tower_type: towerType }
     })
-  }
+  }, [hasJoined, sendMessage])
 
-  const handleSellTower = (towerId: number) => {
+  const handleSellTower = useCallback((towerId: number) => {
     if (!hasJoined) return
     sendMessage({
       type: 'remove_tower',
       room_id: ROOM_ID,
       payload: { tower_id: towerId }
     })
-  }
+  }, [hasJoined, sendMessage])
 
-  const handleUpgradeTower = (towerId: number) => {
+  const handleUpgradeTower = useCallback((towerId: number) => {
     if (!hasJoined) return
     sendMessage({
       type: 'upgrade_tower',
       room_id: ROOM_ID,
       payload: { tower_id: towerId }
     })
-  }
+  }, [hasJoined, sendMessage])
 
-  const handleStartWave = () => {
-    if (!hasJoined || gameState.phase !== 'waiting') return
+  const handleStartWave = useCallback(() => {
+    if (!hasJoined || liveStateRef.current.phase !== 'waiting') return
     sendMessage({ type: 'start_wave', room_id: ROOM_ID })
-  }
+  }, [hasJoined, sendMessage])
 
-  const handleNewGame = () => {
+  const handleNewGame = useCallback(() => {
     if (!hasJoined) return
     sendMessage({ type: 'new_game', room_id: ROOM_ID })
+    liveStateRef.current = defaultGameState
     setGameState(defaultGameState)
-    setFastForward(false)
-  }
+  }, [hasJoined, sendMessage])
 
-  // Keep spawn enemy for debug purposes
-  const handleSpawnEnemy = () => {
+  // Debug-panel helper: the server computes the spawn path itself.
+  const handleSpawnEnemy = useCallback(() => {
     if (!hasJoined) return
-    const spawn = gameState.spawn_point || { x: 0, y: 7 }
-    const goal = gameState.goal_point || { x: 19, y: 7 }
-    const path = findPath(spawn, goal, gameState.towers)
-    if (!path) {
-      alert('Path is completely blocked!')
-      return
-    }
     sendMessage({
       type: 'spawn_enemy',
       room_id: ROOM_ID,
-      payload: { enemy_type: 'basic', path }
+      payload: { enemy_type: 'basic' }
     })
-  }
+  }, [hasJoined, sendMessage])
+
+  // Fast forward is server state; deriving it from the snapshot keeps the
+  // button truthful across page reloads mid-game.
+  const fastForward = gameState.fast_forward ?? false
 
   return (
     <div className="App">
       <header className="App-header">
-        <h1>🦀 Rust Rush - Tower Defense</h1>
+        <h1>🦀 Rust Rush — Tower Defense</h1>
         <div className="status">
-          <span className={status.isConnected ? 'status-dot connected' : 'status-dot disconnected'}>●</span>
-          <span style={{ color: status.isConnected ? '#4CAF50' : '#999' }}>
-            {status.isConnected ? 'Connected' : 'Connecting...'}
+          <span className={status.isConnected ? 'connected' : 'disconnected'}>
+            ● {status.isConnected ? 'ONLINE' : 'CONNECTING…'}
           </span>
           <button
+            className={`btn btn-inline ${showDebug ? 'btn-toggled' : ''}`}
             onClick={() => setShowDebug(!showDebug)}
-            style={{
-              marginLeft: '15px',
-              padding: '5px 10px',
-              fontSize: '12px',
-              cursor: 'pointer',
-              background: showDebug ? '#4CAF50' : '#666',
-              border: 'none',
-              borderRadius: '4px',
-              color: 'white'
-            }}
           >
-            {showDebug ? '🐛 Hide Debug' : '🐛 Show Debug'}
+            DEBUG
           </button>
           <button
+            className={`btn btn-inline ${fastForward ? 'btn-toggled' : ''}`}
             onClick={() => {
-              const next = !fastForward
-              setFastForward(next)
-              sendMessage({ type: 'set_speed', room_id: ROOM_ID, payload: { fast_forward: next } })
-            }}
-            style={{
-              marginLeft: '8px',
-              padding: '5px 10px',
-              fontSize: '12px',
-              cursor: 'pointer',
-              background: fastForward ? '#FF9800' : '#666',
-              border: 'none',
-              borderRadius: '4px',
-              color: 'white'
+              sendMessage({ type: 'set_speed', room_id: ROOM_ID, payload: { fast_forward: !fastForward } })
             }}
             title="Fast forward: 3x game speed for testing"
           >
-            {fastForward ? '⏩ FF: ON' : '⏩ FF: OFF'}
+            FF ×3: {fastForward ? 'ON' : 'OFF'}
           </button>
         </div>
 
@@ -275,6 +257,7 @@ function App() {
         <GameCanvas
           isConnected={status.isConnected && hasJoined}
           gameState={gameState}
+          liveStateRef={liveStateRef}
           onPlaceTower={handlePlaceTower}
           onSellTower={handleSellTower}
           onUpgradeTower={handleUpgradeTower}

@@ -1,313 +1,142 @@
 # 🚀 Rust Rush - Setup Guide
 
-This guide will help you get all three components of Rust Rush running on your local machine.
+The live game is two components: a **Go server** (all game logic, WebSocket, static file serving) and a **React + TypeScript client** (rendering and input only). That's it — see [Legacy components](#-legacy-components) for the historical Rust/PostgreSQL artifacts still in the tree.
 
 ## 📋 Prerequisites
 
-Make sure you have these installed:
-- **Rust** 1.75+ → [rustup.rs](https://rustup.rs/)
 - **Go** 1.21+ → [go.dev/dl](https://go.dev/dl/)
 - **Node.js** 18+ → [nodejs.org](https://nodejs.org/)
-- **PostgreSQL** 15+ → [postgresql.org](https://www.postgresql.org/download/)
 
 Verify installations:
 ```bash
-rust --version
-cargo --version
 go version
 node --version
 npm --version
-psql --version
 ```
 
 ---
 
-## 🗄️ Database Setup
+## 🎮 Production mode (one terminal)
 
-### 1. Create Database
-```bash
-# On Windows (PowerShell)
-& 'C:\Program Files\PostgreSQL\15\bin\createdb.exe' rustrush
-
-# On macOS/Linux
-createdb rustrush
-```
-
-### 2. Run Schema
-```bash
-psql rustrush < database/schema.sql
-```
-
-### 3. Verify Database
-```bash
-psql rustrush
-# Inside psql:
-\dt  # List tables
-\q   # Quit
-```
-
----
-
-## 🦀 Rust Game Engine Setup
-
-### 1. Navigate to Game Engine
-```bash
-cd game-engine
-```
-
-### 2. Build the Project
-```bash
-cargo build
-```
-
-### 3. Run Tests
-```bash
-cargo test
-```
-
-### 4. Run the Engine (Hello World)
-```bash
-cargo run
-```
-
-You should see output like:
-```
-Rust Rush Game Engine
-=====================
-Created game grid: 20x15
-Added tower with ID: 1
-Spawned enemy with ID: 1
-...
-```
-
-### 5. Optional: Run in Release Mode
-```bash
-cargo build --release
-cargo run --release
-```
-
----
-
-## 🐹 Go WebSocket Server Setup
-
-### 1. Navigate to Server
-```bash
-cd server
-```
-
-### 2. Install Dependencies
-```bash
-go mod download
-go mod tidy
-```
-
-### 3. Create .env File
-```bash
-# Copy example
-cp .env.example .env
-
-# Edit .env with your database credentials
-# Windows: notepad .env
-# Mac/Linux: nano .env
-```
-
-Example `.env`:
-```env
-PORT=8080
-DATABASE_URL=postgres://postgres:yourpassword@localhost:5432/rustrush?sslmode=disable
-ALLOWED_ORIGINS=http://localhost:5173
-```
-
-### 4. Run the Server
-```bash
-go run cmd/main.go
-```
-
-You should see:
-```
-Server starting on port 8080
-```
-
-### 5. Test Health Endpoint
-Open browser to: `http://localhost:8080/health`
-
-Should return:
-```json
-{"status": "healthy"}
-```
-
----
-
-## ⚛️ React Client Setup
-
-### 1. Navigate to Client
+1. **Build the client** (once, and after client changes):
 ```bash
 cd client
-```
-
-### 2. Install Dependencies
-```bash
 npm install
+npm run build
 ```
+This outputs static files to `client/dist`.
 
-This will take a few minutes to download all packages.
-
-### 3. Run Development Server
+2. **Run the server** — it serves the built client automatically:
 ```bash
-npm run dev
+cd ../server
+go run main.go
 ```
 
-You should see:
-```
-  VITE v5.0.8  ready in 500 ms
+3. Open **http://localhost:8080** — one process, one port.
 
-  ➜  Local:   http://localhost:5173/
-  ➜  Network: use --host to expose
-  ➜  press h to show help
-```
+> Prefer a standalone binary? `cd server && go build -o rust-rush.exe .` and run it
+> from either the repo root or `server/` — it finds `client/dist` from both.
+> `STATIC_DIR` overrides the location if you move the build elsewhere.
 
-### 4. Open in Browser
-Navigate to: `http://localhost:5173`
+## 🛠️ Development mode (hot reload)
 
-You should see:
-- **Rust Rush** header
-- A 20x15 grid
-- Gold, Health, and Wave counters
-- Start Wave and Pause buttons
-
-### 5. Test Interactivity
-- Hover over grid cells (they should highlight)
-- Click a cell (check browser console for logs)
-
----
-
-## 🎮 Running Everything Together
-
-### Terminal 1: Rust Engine
-```bash
-cd game-engine
-cargo run
-```
-
-### Terminal 2: Go Server
+Terminal 1 — Go server:
 ```bash
 cd server
-go run cmd/main.go
+go run main.go
 ```
+Starts on `http://localhost:8080` (API-only if `client/dist` doesn't exist).
 
-### Terminal 3: React Client
+Terminal 2 — React client with hot reload:
 ```bash
 cd client
+npm install
 npm run dev
 ```
-
-Open browser to `http://localhost:5173` and you should have a working foundation!
+Open **http://localhost:5173**.
 
 ---
 
-## 🧪 Verify Everything Works
+## 🧪 Verify everything works
 
-### 1. Rust Tests
-```bash
-cd game-engine
-cargo test
-```
-Should show: **test result: ok. 5 passed; 0 failed**
-
-### 2. Go Server Health
+### Server health
 ```bash
 curl http://localhost:8080/health
 ```
-Should return: `{"status": "healthy"}`
+Returns `OK`.
 
-### 3. React Build
+### Server tests
+```bash
+cd server
+go test ./...
+```
+Runs the game-logic behavior tests, pathfinding equivalence tests, hub concurrency tests, and an end-to-end WebSocket game flow test.
+
+### Client lint + build
 ```bash
 cd client
+npm run lint
 npm run build
 ```
-Should create `dist/` folder without errors
+`npm run build` should create `client/dist` without errors.
+
+### In the browser
+- **Rust Rush** header with a 20×15 grid
+- Gold ($200), Health (100), Wave counters
+- Place a tower by clicking the grid; Start Wave spawns enemies
 
 ---
 
-## 🐛 Common Issues
+## 🐛 Common issues
 
-### Issue: "cargo not found"
-**Solution**: Install Rust from [rustup.rs](https://rustup.rs/)
+### "go: command not found"
+Install Go from [go.dev](https://go.dev/dl/) and add it to PATH.
 
-### Issue: "go: command not found"
-**Solution**: Install Go from [go.dev](https://go.dev/dl/) and add to PATH
+### "connection refused" on port 8080
+Make sure the Go server is running: `cd server && go run main.go`
 
-### Issue: "createdb: command not found"
-**Solution**: Add PostgreSQL bin to PATH:
-```bash
-# Windows: Add to Path: C:\Program Files\PostgreSQL\15\bin
-# Mac: brew install postgresql
-# Linux: sudo apt-get install postgresql
-```
-
-### Issue: "connection refused" on port 8080
-**Solution**: Make sure Go server is running: `go run cmd/main.go`
-
-### Issue: React shows blank page
-**Solution**: 
-1. Check browser console for errors (F12)
+### React shows a blank page
+1. Check the browser console for errors (F12)
 2. Make sure `npm install` completed successfully
 3. Try `npm run dev` again
 
-### Issue: PostgreSQL authentication failed
-**Solution**: Update `.env` with correct password:
-```env
-DATABASE_URL=postgres://postgres:YOUR_PASSWORD@localhost:5432/rustrush?sslmode=disable
-```
+### Game loads but says Disconnected
+The client connects to `ws://localhost:8080/ws` in dev mode — the Go server must be running alongside Vite.
 
 ---
 
-## 📁 Project Structure
+## 📁 Project structure
 
 ```
 rust-rush/
-├── game-engine/          # Rust game logic ✅ SET UP
-│   ├── src/
-│   │   └── main.rs       # Game state, towers, enemies
-│   └── Cargo.toml
-├── server/               # Go WebSocket server ✅ SET UP
-│   ├── cmd/
-│   │   └── main.go       # Server entry point
-│   ├── internal/
-│   │   ├── game/         # Game room management
-│   │   └── websocket/    # WebSocket handlers
-│   └── go.mod
-├── client/               # React frontend ✅ SET UP
-│   ├── src/
-│   │   ├── App.tsx       # Main app component
-│   │   └── game/
-│   │       └── GameCanvas.tsx  # Canvas rendering
-│   └── package.json
-└── database/
-    └── schema.sql        # Database schema
+├── server/               # Go game server — ALL game logic lives here
+│   ├── main.go           # Entry point: WebSocket + static file serving
+│   ├── e2e_test.go       # End-to-end WebSocket game flow test
+│   └── internal/
+│       ├── game/         # Game state, waves, pathfinding, game loop
+│       └── websocket/    # Hub, client connections, message handlers
+├── client/               # React frontend — rendering and input only
+│   └── src/
+│       ├── App.tsx       # WebSocket wiring, state throttling, debug panel
+│       ├── game/
+│       │   └── GameCanvas.tsx  # Canvas rendering + game UI
+│       ├── hooks/
+│       │   └── useWebSocket.ts # Connection + subscription hook
+│       └── types/
+│           └── game.ts   # Shared types, tower costs, grid constants
+├── game-engine/          # LEGACY — see below
+└── database/             # LEGACY — see below
 ```
 
----
+## 🗄️ Legacy components
 
-## ✅ Next Steps
+Two directories are early-phase artifacts that the live game does **not** use:
 
-Now that everything is set up, you're ready to:
+- **`game-engine/`** — a Rust/macroquad prototype from Phase 1-2. The Go server superseded it; its gameplay constants have long diverged from the real ones in `server/internal/game/state.go`. Do not treat it as a spec.
+- **`database/`** — a PostgreSQL schema from Phase 1. No code connects to a database; state is in-memory. Kept only for a possible future persistence phase (see TODO.md Phase 23).
 
-1. ✅ **Phase 1 Complete**: Project structure initialized
-2. 🎯 **Next**: Implement A* pathfinding in Rust
-3. 🎯 **Then**: Connect WebSocket communication
-4. 🎯 **Then**: Add tower placement in React
-
-Check the [TODO.md](../TODO.md) for the full roadmap!
+Neither is needed to build, run, or develop the game.
 
 ---
 
-## 🆘 Need Help?
-
-If you're stuck:
-1. Check error messages carefully
-2. Verify all prerequisites are installed
-3. Make sure you're in the correct directory
-4. Try restarting all three services
-
-Happy coding! 🦀🐹⚛️
+Check [TODO.md](./TODO.md) for the full roadmap.

@@ -27,15 +27,20 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 - **Wave Preview** — See the exact enemy composition of the next (or current) wave at a glance
 - **Game Over & New Game** — Full reset flow with a single click
 
-#### Visual Effects
-- **Projectile System** — Bullets with glowing trails fly toward enemies; splash projectiles render orange
-- **Muzzle Flashes** — 100ms flash when towers fire
-- **Explosion Effects** — Animated explosions on hit; AOE hits show full blast radius
-- **Health Bars** — Real-time above each enemy
-- **Tower Rotation** — Towers rotate to face their current target
-- **Range Indicators** — Dashed circles show range when a tower is selected
-- **Tower Upgrade Rings** — Gold rings around towers indicate upgrade level (1–3 rings for levels 2–4)
-- **Slow Visual** — Slowed enemies render blue with a ring indicator
+#### Visuals — "NEON IRONLINE" theme
+- **Shape language** — towers are static geometric hardware (octagon/diamond/chamfered-square/hexagon plates with rotating turrets, cool accents); enemies are heading-rotated hostile craft (dart/needle/bastion/dreadnought, warm accents). The distinction survives grayscale.
+- **The Switchback map** — three containment bulkheads force an S-shaped route (44-cell path); walls are unbuildable and enemies path around them
+- **Spawn & goal gates** — animated portals (rotating cores, pulse rings, marching chevrons); the goal gate flips to alarm-red when health is low
+- **Per-type projectiles** — cyan pulse bolts, violet rail tracers, gold mortar shells with echo trails, spinning stasis shards
+- **Muzzle flashes** — directional 3-ray flash at the actual muzzle tip (100ms)
+- **Explosions** — additive shockwave rings with sparks; AOE blasts expand to the full splash radius
+- **Health bars** — appear once a unit is damaged (boss always), 3-step color with segment ticks on heavies
+- **Target reticles** — each tower paints corner ticks on its current victim in its own accent color
+- **Tower rotation** — turrets track their targets; turret size and barrel length grow with level
+- **Range indicators** — animated dashed circles when a tower is selected or being placed
+- **Upgrade pips** — 4 pip slots under every tower; filled pips + turret scale read the level at a glance
+- **Stasis visual** — slowed enemies get a rotating hex cage + frost crystals (shape, not tint)
+- **60 FPS discipline** — static board pre-rendered once; glow via pre-built sprites (no per-frame shadowBlur); Path2D geometry cache
 
 #### Game Flow
 - **Auto Wave Toggle** — Automatically starts the next wave after a 5s countdown
@@ -55,12 +60,12 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 
 ### Tower Types
 
-| Tower    | Cost | Range | Damage | Fire Rate | Special                                              |
-|----------|------|-------|--------|-----------|------------------------------------------------------|
-| 🗼 Basic  | $50  | 3.0   | 15     | 1.0/sec   | Reliable all-rounder                                 |
-| 🎯 Sniper | $100 | 6.0   | 50     | 0.5/sec   | Long-range, high single-target                       |
-| 💥 Splash | $75  | 2.5   | 10     | 1.5/sec   | AOE: 60% damage in 1.5u radius, upgrades increase both |
-| ❄️ Slow   | $60  | 3.5   | 8      | 0.8/sec   | 60% speed reduction, upgrades extend duration/strength |
+| Tower                | Cost | Range | Damage | Fire Rate | Special                                              |
+|----------------------|------|-------|--------|-----------|------------------------------------------------------|
+| Basic — "Pulse"      | $50  | 3.0   | 15     | 1.0/sec   | Reliable all-rounder                                 |
+| Sniper — "Railgun"   | $100 | 6.0   | 50     | 0.5/sec   | Long-range, high single-target                       |
+| Splash — "Mortar"    | $75  | 2.5   | 10     | 1.5/sec   | AOE: 60% damage in 1.5u radius, upgrades increase both |
+| Slow — "Stasis"      | $60  | 3.5   | 8      | 0.8/sec   | 60% speed reduction, upgrades extend duration/strength |
 
 ### Tower Upgrades
 
@@ -75,12 +80,12 @@ Sell at any level refunds 70% of total gold spent.
 
 ### Enemy Types
 
-| Type     | Health | Speed | Gold | Score      | Appears  |
-|----------|--------|-------|------|------------|----------|
-| 🦀 Basic  | 100    | 2.0   | +10  | 10 × wave  | Wave 1+  |
-| 💨 Fast   | 50     | 4.0   | +8   | 15 × wave  | Wave 4+  |
-| 🛡️ Tank   | 300    | 1.0   | +25  | 30 × wave  | Wave 7+  |
-| 💀 Boss   | 1000   | 0.5   | +100 | 100 × wave | Wave 11+ |
+| Type                  | Health | Speed | Gold | Score      | Appears  |
+|-----------------------|--------|-------|------|------------|----------|
+| Basic — "Dart"        | 100    | 2.0   | +10  | 10 × wave  | Wave 1+  |
+| Fast — "Needle"       | 50     | 4.0   | +8   | 15 × wave  | Wave 4+  |
+| Tank — "Bastion"      | 300    | 1.0   | +25  | 30 × wave  | Wave 7+  |
+| Boss — "Dreadnought"  | 1000   | 0.5   | +100 | 100 × wave | Wave 11+ |
 
 Both health and speed scale with wave number — enemies get meaningfully tougher past wave 5.
 
@@ -89,6 +94,15 @@ Both health and speed scale with wave number — enemies get meaningfully toughe
 - **Kills**: base points (table above) × current wave number
 - **Wave completion bonus**: 50 × wave — **doubled** if you finish the wave at full health
 - **High score**: best run is saved locally in your browser
+
+### The Map — "The Switchback"
+
+Three permanent bulkheads (x=4, x=9, x=15) force enemies down an S-shaped
+route — the shortest path is **44 cells** versus 20 on an open board. Walls
+can't be built on; towers placed in the corridors reroute enemies in real
+time, and the three gap chokepoints (marked with hazard stripes) are natural
+kill zones. The layout is server-authoritative: pathfinding, placement
+validation, and the client renderer all read the same obstacle list.
 
 ### Wave Progression
 
@@ -188,11 +202,12 @@ Client starts on `http://localhost:5173` with hot reload
 3. **Earn gold** — Kill enemies to earn gold for more towers
 4. **Upgrade towers** — Click a placed tower and hit Upgrade to boost its stats
 5. **Sell towers** — Sell to reorganize; refund is 70% of everything spent
-6. **Survive** — Don't let enemies reach G or your health hits 0
+6. **Survive** — Don't let enemies reach the goal gate or your health hits 0
 
 ### Tips
-- Block the path to force enemies on longer routes
-- Snipers cover the whole board — place them early
+- The three bulkhead chokepoints are natural kill zones — stack towers there
+- Block corridors to force even longer routes (fully walled-in enemies stop and wait — they don't leak damage)
+- Railguns have by far the longest range (6 cells) — place them centrally to cover multiple corridors
 - Use Slow towers to keep tanks and bosses in your kill zone longer
 - Splash towers shine at choke points where enemies bunch up
 - Upgrade your key towers rather than spreading gold thin
@@ -221,29 +236,44 @@ Client starts on `http://localhost:5173` with hot reload
 ## 📂 Project Structure
 ```
 rust-rush/
+├── README.md / TODO.md / SETUP.md   # Docs live at the repo root
 ├── server/
-│   ├── main.go
+│   ├── main.go               # Entry point: WebSocket + static serving
+│   ├── e2e_test.go           # End-to-end WebSocket game flow test
 │   └── internal/
 │       ├── game/
 │       │   ├── state.go      # Game state, towers, enemies, wave config
-│       │   └── manager.go    # Game loop, wave spawner
+│       │   ├── manager.go    # Game loop, wave spawner
+│       │   └── *_test.go     # Behavior + pathfinding equivalence tests
 │       └── websocket/
 │           ├── hub.go        # WebSocket broadcast hub
 │           └── client.go     # Client connection & message handlers
 ├── client/
 │   └── src/
-│       ├── App.tsx
+│       ├── App.tsx           # WS wiring, UI state throttling, debug panel
 │       ├── game/
 │       │   └── GameCanvas.tsx
 │       ├── hooks/
 │       │   └── useWebSocket.ts
 │       └── types/
-│           └── game.ts
-└── docs/
-    └── TODO.md
+│           └── game.ts       # Shared types, tower costs, grid constants
+├── game-engine/              # LEGACY Rust prototype — unused, stats diverged
+└── database/                 # LEGACY Postgres schema — nothing connects to it
 ```
 
 ## 🧪 Testing
+
+### Automated tests
+```bash
+cd server && go test ./...
+```
+Covers game-logic behavior (scoring, upgrades, scaling, slow/splash, trapped
+enemies, blocked waves), pathfinding equivalence against the reference BFS,
+hub concurrency, and an end-to-end WebSocket game flow.
+
+```bash
+cd client && npm run lint
+```
 
 ### Start the server
 ```bash
@@ -318,4 +348,4 @@ MIT License
 
 ---
 
-**Built with** 🐹 Go and ⚛️ React | **Status**: Phase 16 Complete ✅ | **Last Updated**: July 1, 2026
+**Built with** 🐹 Go and ⚛️ React | **Status**: Phase 16 Complete ✅ + quality/perf pass + visual overhaul | **Last Updated**: July 3, 2026

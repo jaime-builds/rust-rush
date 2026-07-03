@@ -7,16 +7,8 @@ import (
 	"time"
 )
 
-// GameState represents the current state of a game room (legacy)
-type GameState struct {
-	RoomID   string          `json:"room_id"`
-	Players  []string        `json:"players"`
-	GameData json.RawMessage `json:"game_data"`
-}
-
 // Manager handles multiple game rooms
 type Manager struct {
-	rooms         map[string]*GameState
 	shootingRooms map[string]*GameStateWithShooting
 	mu            sync.RWMutex
 	broadcast     chan BroadcastMessage
@@ -31,44 +23,25 @@ type BroadcastMessage struct {
 // NewManager creates a new game manager
 func NewManager() *Manager {
 	return &Manager{
-		rooms:         make(map[string]*GameState),
 		shootingRooms: make(map[string]*GameStateWithShooting),
 		broadcast:     make(chan BroadcastMessage, 256),
 	}
 }
 
-// CreateRoom creates a new game room
-func (m *Manager) CreateRoom(roomID string) *GameState {
+// GetOrCreateShootingRoom returns the room for roomID, creating it if absent.
+// Check and create happen under one lock so concurrent joins cannot create
+// duplicate rooms (each with its own game loop). created reports whether this
+// call made the room — only the creator should start the game loop.
+func (m *Manager) GetOrCreateShootingRoom(roomID string) (room *GameStateWithShooting, created bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	state := &GameState{
-		RoomID:  roomID,
-		Players: make([]string, 0),
+	if room, exists := m.shootingRooms[roomID]; exists {
+		return room, false
 	}
-
-	m.rooms[roomID] = state
-	return state
-}
-
-// CreateShootingRoom creates a new game room with shooting mechanics
-func (m *Manager) CreateShootingRoom(roomID string) *GameStateWithShooting {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	state := NewGameStateWithShooting(roomID)
-	m.shootingRooms[roomID] = state
-
-	return state
-}
-
-// GetRoom retrieves a game room by ID
-func (m *Manager) GetRoom(roomID string) (*GameState, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	room, exists := m.rooms[roomID]
-	return room, exists
+	room = NewGameStateWithShooting(roomID)
+	m.shootingRooms[roomID] = room
+	return room, true
 }
 
 // GetShootingRoom retrieves a shooting game room by ID
@@ -80,64 +53,40 @@ func (m *Manager) GetShootingRoom(roomID string) (*GameStateWithShooting, bool) 
 	return room, exists
 }
 
-// DeleteRoom removes a game room
-func (m *Manager) DeleteRoom(roomID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	delete(m.rooms, roomID)
-	delete(m.shootingRooms, roomID)
-}
-
 // AddPlayer adds a player to a room
 func (m *Manager) AddPlayer(roomID, playerID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	room, exists := m.shootingRooms[roomID]
+	m.mu.RUnlock()
 
-	if room, exists := m.shootingRooms[roomID]; exists {
-		room.mu.Lock()
-		room.Players = append(room.Players, playerID)
-		room.mu.Unlock()
-		return true
-	}
-
-	room, exists := m.rooms[roomID]
 	if !exists {
 		return false
 	}
 
+	room.mu.Lock()
 	room.Players = append(room.Players, playerID)
+	room.mu.Unlock()
 	return true
 }
 
 // RemovePlayer removes a player from a room
 func (m *Manager) RemovePlayer(roomID, playerID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	room, exists := m.shootingRooms[roomID]
+	m.mu.RUnlock()
 
-	if room, exists := m.shootingRooms[roomID]; exists {
-		room.mu.Lock()
-		for i, id := range room.Players {
-			if id == playerID {
-				room.Players = append(room.Players[:i], room.Players[i+1:]...)
-				break
-			}
-		}
-		room.mu.Unlock()
-		return
-	}
-
-	room, exists := m.rooms[roomID]
 	if !exists {
 		return
 	}
 
+	room.mu.Lock()
 	for i, id := range room.Players {
 		if id == playerID {
 			room.Players = append(room.Players[:i], room.Players[i+1:]...)
 			break
 		}
 	}
+	room.mu.Unlock()
 }
 
 // StartGameLoop starts the 60 FPS game loop for a room
@@ -165,9 +114,9 @@ func (m *Manager) StartGameLoop(roomID string) {
 		snapshot := room.GetSnapshot()
 
 		frameCount++
-		if frameCount%60 == 0 {
+		if frameCount%600 == 0 {
 			elapsed := time.Since(lastLog)
-			fps := float64(60) / elapsed.Seconds()
+			fps := float64(600) / elapsed.Seconds()
 			log.Printf("📊 Room %s - FPS: %.1f | Phase: %s | Wave: %d | Towers: %d | Enemies: %d | Projectiles: %d",
 				roomID, fps, snapshot.Phase, snapshot.Wave, len(snapshot.Towers), len(snapshot.Enemies), len(snapshot.Projectiles))
 			lastLog = time.Now()
@@ -211,18 +160,20 @@ func (m *Manager) SpawnWave(roomID string) {
 		total += group.Count
 	}
 
-	log.Printf("🌊 Starting wave %d — %d enemies total", waveNum, total)
-	room.StartWave(total)
-
-	// Capture the cancel channel for THIS wave
+	// Capture the cancel channel for THIS wave before flipping the phase, so
+	// a Reset that lands mid-setup still cancels this spawner.
 	cancel := room.GetSpawnCancel()
 
-	path := room.FindPathFromSpawn()
-	if path == nil {
-		log.Printf("⚠️ No path found for wave spawn in room %s", roomID)
+	if !room.StartWave(total) {
+		log.Printf("⚠️ Wave %d not started in room %s — game not in waiting phase", waveNum, roomID)
 		return
 	}
+	log.Printf("🌊 Starting wave %d — %d enemies total", waveNum, total)
 
+	// No early bail when the path is blocked at wave start: each iteration
+	// re-checks and skips blocked spawns while still decrementing the
+	// remaining counter, so a fully walled-off wave completes instead of
+	// soft-locking the game in the active phase.
 	for _, group := range config.Enemies {
 		for i := 0; i < group.Count; i++ {
 			// Check if cancelled (new game started)
@@ -237,11 +188,8 @@ func (m *Manager) SpawnWave(roomID string) {
 				return
 			}
 
-			currentPath := room.FindPathFromSpawn()
-			if currentPath != nil {
-				path = currentPath
+			if path := room.FindPathFromSpawn(); path != nil {
 				room.AddEnemy(group.EnemyType, path, waveNum)
-				log.Printf("👾 Spawned %s enemy (%d/%d) in wave %d", group.EnemyType, i+1, group.Count, waveNum)
 			} else {
 				log.Printf("⚠️ Path blocked, skipping enemy %d/%d in wave %d", i+1, group.Count, waveNum)
 			}

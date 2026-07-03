@@ -3,6 +3,12 @@ export interface Position {
   y: number
 }
 
+// Board geometry — single client-side source; the server hardcodes the same
+// 20×15 grid in state.go findPath.
+export const GRID_WIDTH = 20
+export const GRID_HEIGHT = 15
+export const CELL_SIZE = 40
+
 export type TowerType = 'basic' | 'sniper' | 'splash' | 'slow'
 export type EnemyType = 'basic' | 'fast' | 'tank' | 'flying' | 'boss'
 export type GamePhase = 'waiting' | 'active' | 'game_over'
@@ -34,8 +40,6 @@ export interface Enemy {
   speed: number
   slow_duration?: number
   slow_multiplier?: number
-  path?: Position[]
-  path_index?: number
 }
 
 export interface Projectile {
@@ -83,8 +87,13 @@ export interface GameState {
   phase: GamePhase
   enemies_remaining: number
   game_time: number
+  fast_forward?: boolean
+  speed_multiplier?: number
   spawn_point?: Position
   goal_point?: Position
+  // Static map walls (server-authoritative): enemies path around them,
+  // towers cannot be built on them.
+  obstacles?: Position[]
   wave_preview?: WavePreviewEntry[]
 }
 

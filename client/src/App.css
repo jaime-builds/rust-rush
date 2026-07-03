@@ -12,24 +12,39 @@
 }
 
 .App-header {
-  padding: 20px;
-  background-color: #1a1a1a;
-  border-bottom: 3px solid #4CAF50;
-  margin-bottom: 30px;
+  padding: 18px 20px;
+  background: linear-gradient(180deg, var(--bg-1), rgba(10, 18, 32, 0.4));
+  border-bottom: 1px solid var(--line);
+  position: relative;
+  margin-bottom: 26px;
+}
+
+.App-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  height: 2px;
+  width: 220px;
+  background: linear-gradient(90deg, var(--cyan), transparent);
 }
 
 .App-header h1 {
-  margin: 0;
-  font-size: 2.5em;
-  background: linear-gradient(135deg, #ff6b00 0%, #ff9d00 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  font-size: 1.7em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--text);
+  text-shadow: 0 0 12px rgba(0, 229, 255, 0.35);
 }
 
 .status {
   margin-top: 10px;
-  font-size: 1.1em;
+  font-size: 0.95em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 main {
@@ -41,9 +56,10 @@ main {
 
 footer {
   padding: 20px;
-  color: #888;
-  font-size: 0.9em;
-  border-top: 1px solid #333;
+  color: var(--text-dim);
+  font-size: 0.8em;
+  letter-spacing: 0.08em;
+  border-top: 1px solid var(--line);
   margin-top: 40px;
 }
 

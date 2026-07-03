@@ -1,33 +1,64 @@
 import { useEffect, useRef, useState } from 'react'
 import './GameCanvas.css'
-import { Tower, TowerType, Enemy, GameState, TOWER_COSTS } from '../types/game'
+import {
+  Tower, TowerType, Enemy, EnemyType, Projectile, MuzzleFlash, Explosion, Position,
+  GameState, TOWER_COSTS, GRID_WIDTH, GRID_HEIGHT, CELL_SIZE,
+} from '../types/game'
 
-const GRID_WIDTH = 20
-const GRID_HEIGHT = 15
-const CELL_SIZE = 40
+// ————————————————————————————————————————————————————————————————————————
+// "NEON IRONLINE" visual theme.
+// The one rule: SHAPE is the discriminator, hue is the garnish. Towers are
+// static closed hardware polygons (cool accents); enemies are pointed,
+// heading-rotated glyphs (warm accents). The design survives grayscale.
+// ————————————————————————————————————————————————————————————————————————
 
-interface Position {
-  x: number
-  y: number
+const PALETTE = {
+  bgDeep: '#04070F',
+  bgNavy: '#0A1428',
+  bgGlow: '#10223E',
+  gridMinor: '#101E33',
+  gridMajor: '#16283F',
+  gridNode: '#22395C',
+  wallFillHi: '#0D1A2E',
+  wallFillLo: '#0A1322',
+  wallEdge: '#2E5E8F',
+  wallInner: '#16406B',
+  wallHatch: '#14263E',
+  wallNode: '#46A8FF',
+  hazard: '#B8860B',
+  platefill: '#0B1526',
+  turretMetal: '#0E2230',
+  spawn: '#FF4655',
+  spawnLight: '#FF8A94',
+  goal: '#00E5FF',
+  goalLight: '#7DF3FF',
+  hpHigh: '#35F58C',
+  hpMid: '#FFC533',
+  hpLow: '#FF3B4E',
+  hpTrack: '#0A101C',
+  hpBorder: '#23324D',
+  slowRing: '#3D8BFF',
+  slowCrystal: '#BFE0FF',
+  danger: '#FF4655',
+  text: '#D9E8FF',
+  textDim: '#7C90B0',
+  gold: '#FFD60A',
+  white: '#FFFFFF',
 }
 
-interface GameCanvasProps {
-  isConnected: boolean
-  onPlaceTower: (x: number, y: number, towerType: string) => void
-  onSellTower: (towerId: number) => void
-  onUpgradeTower: (towerId: number) => void
-  onStartWave: () => void
-  onNewGame: () => void
-  onSpawnEnemy?: () => void
-  gameState?: GameState
-  showDebug?: boolean
-}
-
+// Tower accents (cool faction) — used by the canvas AND the HTML buttons.
 const TOWER_COLORS: Record<string, string> = {
-  basic: '#4CAF50',
-  sniper: '#2196F3',
-  splash: '#FF9800',
-  slow: '#9C27B0',
+  basic: '#00E5FF',
+  sniper: '#B388FF',
+  splash: '#FFD60A',
+  slow: '#3D8BFF',
+}
+
+const TOWER_LIGHT: Record<string, string> = {
+  basic: '#9FF6FF',
+  sniper: '#DCC8FF',
+  splash: '#FFF3B0',
+  slow: '#A6CFFF',
 }
 
 const TOWER_RANGES: Record<string, number> = {
@@ -37,37 +68,46 @@ const TOWER_RANGES: Record<string, number> = {
   slow: 3.5,
 }
 
-const TOWER_LABELS: Record<string, string> = {
-  basic: '🗼 Basic',
-  sniper: '🎯 Sniper',
-  splash: '💥 Splash',
-  slow: '❄️ Slow',
+const TOWER_NAMES: Record<string, string> = {
+  basic: 'Pulse',
+  sniper: 'Railgun',
+  splash: 'Mortar',
+  slow: 'Stasis',
 }
 
-// Single source of truth for enemy colors — used by both canvas rendering and the glossary legend
+// Enemy accents (warm faction) — single source for canvas + legend + preview.
 const ENEMY_COLORS: Record<string, string> = {
-  basic: '#ff4444',
-  fast: '#ff9944',
-  tank: '#994444',
+  basic: '#FF4655',
+  fast: '#FF9E2C',
+  tank: '#C7502E',
   flying: '#44ff99',
-  boss: '#ff0000',
+  boss: '#FF2ED2',
 }
 
-const ENEMY_EMOJI: Record<string, string> = {
-  basic: '🦀',
-  fast: '💨',
-  tank: '🛡️',
-  flying: '🕊️',
-  boss: '💀',
+const ENEMY_BODY: Record<string, string> = {
+  basic: '#2A0E14',
+  fast: '#291606',
+  tank: '#200D08',
+  flying: '#0E2A1C',
+  boss: '#230A1E',
+}
+
+// Visual radius per enemy type (px) — drives reticles, bars, stasis cages.
+const ENEMY_RADIUS: Record<string, number> = {
+  basic: 10,
+  fast: 9,
+  tank: 15,
+  flying: 10,
+  boss: 18,
 }
 
 // Enemy stat sheet — kept in sync with server getEnemyStats/getEnemyGoldReward/getEnemyScorePoints.
 // 'flying' is omitted: it exists in server stats but never spawns in any wave.
-const ENEMY_GLOSSARY: { type: string, name: string, health: number, speed: number, gold: number, score: number, appears: string }[] = [
-  { type: 'basic', name: 'Basic', health: 100, speed: 2.0, gold: 10, score: 10, appears: 'Wave 1+' },
-  { type: 'fast', name: 'Fast', health: 50, speed: 4.0, gold: 8, score: 15, appears: 'Wave 4+' },
-  { type: 'tank', name: 'Tank', health: 300, speed: 1.0, gold: 25, score: 30, appears: 'Wave 7+' },
-  { type: 'boss', name: 'Boss', health: 1000, speed: 0.5, gold: 100, score: 100, appears: 'Wave 11+' },
+const ENEMY_GLOSSARY: { type: EnemyType, name: string, health: number, speed: number, gold: number, score: number, appears: string }[] = [
+  { type: 'basic', name: 'Dart', health: 100, speed: 2.0, gold: 10, score: 10, appears: 'Wave 1+' },
+  { type: 'fast', name: 'Needle', health: 50, speed: 4.0, gold: 8, score: 15, appears: 'Wave 4+' },
+  { type: 'tank', name: 'Bastion', health: 300, speed: 1.0, gold: 25, score: 30, appears: 'Wave 7+' },
+  { type: 'boss', name: 'Dreadnought', health: 1000, speed: 0.5, gold: 100, score: 100, appears: 'Wave 11+' },
 ]
 
 const HIGH_SCORE_KEY = 'rustRushHighScore'
@@ -81,6 +121,166 @@ const readHighScore = (): number => {
   }
 }
 
+// ————————————————————————————————————————————————————————————————————————
+// Cached geometry (Path2D, local coords, forward = +x) and glow sprites.
+// Built once at module load; per-entity drawing is translate/rotate + fill.
+// ————————————————————————————————————————————————————————————————————————
+
+const polyPath = (pts: number[][]): Path2D => {
+  const p = new Path2D()
+  p.moveTo(pts[0][0], pts[0][1])
+  for (let i = 1; i < pts.length; i++) p.lineTo(pts[i][0], pts[i][1])
+  p.closePath()
+  return p
+}
+
+const regularPolyPath = (r: number, sides: number, rot = 0): Path2D => {
+  const pts: number[][] = []
+  for (let i = 0; i < sides; i++) {
+    const a = rot + (i * 2 * Math.PI) / sides
+    pts.push([r * Math.cos(a), r * Math.sin(a)])
+  }
+  return polyPath(pts)
+}
+
+const scalePts = (pts: number[][], s: number) => pts.map(([x, y]) => [x * s, y * s])
+
+const TANK_HULL = [[15, 0], [7, -11], [-10, -11], [-15, 0], [-10, 11], [7, 11]]
+
+const SHAPES = {
+  towerBase: {
+    basic: regularPolyPath(14, 8, Math.PI / 8),
+    sniper: polyPath([[0, -15], [15, 0], [0, 15], [-15, 0]]),
+    splash: polyPath([[-14, -9], [-9, -14], [9, -14], [14, -9], [14, 9], [9, 14], [-9, 14], [-14, 9]]),
+    slow: regularPolyPath(14, 6, -Math.PI / 2),
+  } as Record<string, Path2D>,
+  towerBaseInset: {
+    basic: regularPolyPath(12, 8, Math.PI / 8),
+    sniper: polyPath([[0, -13], [13, 0], [0, 13], [-13, 0]]),
+    splash: polyPath(scalePts([[-14, -9], [-9, -14], [9, -14], [14, -9], [14, 9], [9, 14], [-9, 14], [-14, 9]], 12 / 14)),
+    slow: regularPolyPath(12, 6, -Math.PI / 2),
+  } as Record<string, Path2D>,
+  enemy: {
+    basic: polyPath([[10, 0], [-8, -7], [-4, 0], [-8, 7]]),
+    fast: polyPath([[11, 0], [-7, -5], [-2, 0], [-7, 5]]),
+    tank: polyPath(TANK_HULL),
+    tankInner: polyPath(scalePts(TANK_HULL, 0.62)),
+    flying: polyPath([[9, 0], [0, -6], [-9, 0], [0, 6]]),
+    boss: regularPolyPath(12, 8, Math.PI / 8),
+  } as Record<string, Path2D>,
+}
+
+const glowSpriteCache = new Map<string, HTMLCanvasElement>()
+const hexAlpha = (hex: string, a: number): string => {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r}, ${g}, ${b}, ${a})`
+}
+
+const glowSprite = (color: string): HTMLCanvasElement => {
+  let s = glowSpriteCache.get(color)
+  if (!s) {
+    s = document.createElement('canvas')
+    s.width = 32
+    s.height = 32
+    const g = s.getContext('2d')!
+    const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16)
+    grad.addColorStop(0, hexAlpha(color, 0.55))
+    grad.addColorStop(0.35, hexAlpha(color, 0.2))
+    grad.addColorStop(1, hexAlpha(color, 0))
+    g.fillStyle = grad
+    g.fillRect(0, 0, 32, 32)
+    glowSpriteCache.set(color, s)
+  }
+  return s
+}
+
+const roundRectPath = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + w, y, x + w, y + h, r)
+  ctx.arcTo(x + w, y + h, x, y + h, r)
+  ctx.arcTo(x, y + h, x, y, r)
+  ctx.arcTo(x, y, x + w, y, r)
+  ctx.closePath()
+}
+
+const shortestAngleDelta = (a: number): number => {
+  let d = a % (Math.PI * 2)
+  if (d > Math.PI) d -= Math.PI * 2
+  if (d < -Math.PI) d += Math.PI * 2
+  return d
+}
+
+// ————————————————————————————————————————————————————————————————————————
+// Inline SVG silhouettes — the HTML buttons and legends share the canvas
+// shape language, so the UI teaches shapes, not hues.
+// ————————————————————————————————————————————————————————————————————————
+
+const TowerIcon = ({ type, size = 20 }: { type: TowerType, size?: number }) => {
+  const c = TOWER_COLORS[type]
+  const common = { fill: PALETTE.platefill, stroke: c, strokeWidth: 2 }
+  return (
+    <svg width={size} height={size} viewBox="-20 -20 40 40" aria-hidden="true">
+      {type === 'basic' && (<>
+        <polygon points="12.9,5.4 5.4,12.9 -5.4,12.9 -12.9,5.4 -12.9,-5.4 -5.4,-12.9 5.4,-12.9 12.9,-5.4" {...common} />
+        <rect x="2" y="-3" width="15" height="6" fill={c} stroke="none" />
+      </>)}
+      {type === 'sniper' && (<>
+        <polygon points="0,-15 15,0 0,15 -15,0" {...common} />
+        <rect x="1" y="-3" width="18" height="2" fill={c} stroke="none" />
+        <rect x="1" y="1" width="18" height="2" fill={c} stroke="none" />
+      </>)}
+      {type === 'splash' && (<>
+        <polygon points="-14,-9 -9,-14 9,-14 14,-9 14,9 9,14 -9,14 -14,9" {...common} />
+        <rect x="0" y="-5" width="12" height="10" fill={c} stroke="none" />
+      </>)}
+      {type === 'slow' && (<>
+        <polygon points="0,-14 12.1,-7 12.1,7 0,14 -12.1,7 -12.1,-7" {...common} />
+        <polygon points="5,-2.5 14,0 5,2.5" fill={c} stroke="none" />
+        <polygon points="-1.3,3.9 -7,12.1 -4.6,2.9" fill={c} stroke="none" />
+        <polygon points="-4.6,-2.9 -7,-12.1 -1.3,-3.9" fill={c} stroke="none" />
+      </>)}
+    </svg>
+  )
+}
+
+const EnemyGlyph = ({ type, size = 14 }: { type: string, size?: number }) => {
+  const c = ENEMY_COLORS[type] ?? PALETTE.danger
+  const body = ENEMY_BODY[type] ?? '#1A0A0E'
+  return (
+    <svg width={size} height={size} viewBox="-16 -16 32 32" aria-hidden="true">
+      {type === 'basic' && <polygon points="10,0 -8,-7 -4,0 -8,7" fill={body} stroke={c} strokeWidth="2" />}
+      {type === 'fast' && <polygon points="13,0 -9,-6 -3,0 -9,6" fill={body} stroke={c} strokeWidth="2" />}
+      {type === 'tank' && (<>
+        <polygon points="12,0 5.6,-8.8 -8,-8.8 -12,0 -8,8.8 5.6,8.8" fill={body} stroke={c} strokeWidth="2" />
+        <polygon points="7.4,0 3.5,-5.5 -5,-5.5 -7.4,0 -5,5.5 3.5,5.5" fill="none" stroke={c} strokeWidth="1" opacity="0.7" />
+      </>)}
+      {type === 'boss' && (<>
+        <polygon points="9.2,3.8 3.8,9.2 -3.8,9.2 -9.2,3.8 -9.2,-3.8 -3.8,-9.2 3.8,-9.2 9.2,-3.8" fill={body} stroke={c} strokeWidth="2" />
+        <circle r="2.5" fill="#FFFFFF" />
+      </>)}
+    </svg>
+  )
+}
+
+interface GameCanvasProps {
+  isConnected: boolean
+  onPlaceTower: (x: number, y: number, towerType: string) => void
+  onSellTower: (towerId: number) => void
+  onUpgradeTower: (towerId: number) => void
+  onStartWave: () => void
+  onNewGame: () => void
+  onSpawnEnemy?: () => void
+  gameState?: GameState
+  // Newest snapshot, updated on every server message (60/sec). The canvas
+  // draws from this so it stays smooth while the React tree re-renders at
+  // the throttled gameState cadence.
+  liveStateRef: React.MutableRefObject<GameState>
+  showDebug?: boolean
+}
+
 const GameCanvas = ({
   isConnected,
   onPlaceTower,
@@ -90,14 +290,20 @@ const GameCanvas = ({
   onNewGame,
   onSpawnEnemy,
   gameState,
+  liveStateRef,
   showDebug,
 }: GameCanvasProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationFrameRef = useRef<number>()
-  const gameStateRef = useRef<GameState | undefined>(gameState)
   const hoveredCellRef = useRef<Position | null>(null)
   const selectedTowerTypeRef = useRef<TowerType | null>('basic')
   const selectedTowerRef = useRef<Tower | null>(null)
+  // Canvas-only state: pre-rendered static background and per-entity headings
+  // (computed from movement deltas — the server doesn't send facing angles).
+  const bgCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const bgKeyRef = useRef('')
+  const enemyHeadingsRef = useRef<Map<number, { x: number; y: number; angle: number }>>(new Map())
+  const projHeadingsRef = useRef<Map<number, { x: number; y: number; angle: number }>>(new Map())
 
   const [hoveredCell, setHoveredCell] = useState<Position | null>(null)
   const [selectedTowerType, setSelectedTowerType] = useState<TowerType | null>('basic')
@@ -110,8 +316,7 @@ const GameCanvas = ({
   const prevPhaseRef = useRef<string>('waiting')
   const [showGlossary, setShowGlossary] = useState(false)
 
-  // Sync refs
-  gameStateRef.current = gameState
+  // Sync refs (game state itself arrives via liveStateRef at full rate)
   hoveredCellRef.current = hoveredCell
   selectedTowerTypeRef.current = selectedTowerType
   selectedTowerRef.current = selectedTower
@@ -140,7 +345,7 @@ const GameCanvas = ({
 
     countdownRef.current = tick
     return () => clearInterval(tick)
-  }, [autoWave, isWaveActive, isGameOver, isConnected])
+  }, [autoWave, isWaveActive, isGameOver, isConnected, onStartWave])
 
   // Clear countdown if wave starts manually or game over
   useEffect(() => {
@@ -171,7 +376,9 @@ const GameCanvas = ({
       setIsNewHighScore(false)
     }
     prevPhaseRef.current = phase
-  }, [phase])
+    // prevPhaseRef gates the body to phase *transitions*, so the extra
+    // score/highScore re-runs are no-ops.
+  }, [phase, gameState?.score, highScore])
 
   // Deselect tower if it no longer exists (was sold or cleared)
   // Also sync selected tower stats when server broadcasts an update (e.g. after upgrade)
@@ -184,12 +391,14 @@ const GameCanvas = ({
         setSelectedTower(updated)
       }
     }
-  }, [gameState?.towers])
+  }, [gameState?.towers, selectedTower])
 
-  // Animation loop
+  // Animation loop — runs once for the component's lifetime and calls the
+  // freshest render closure through a ref, so the effect needs no deps.
+  const renderRef = useRef<() => void>(() => {})
   useEffect(() => {
     const animate = () => {
-      render()
+      renderRef.current()
       animationFrameRef.current = requestAnimationFrame(animate)
     }
     animationFrameRef.current = requestAnimationFrame(animate)
@@ -204,7 +413,7 @@ const GameCanvas = ({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const gs = gameStateRef.current
+    const gs = liveStateRef.current
     const hovered = hoveredCellRef.current
     const selType = selectedTowerTypeRef.current
     const selTower = selectedTowerRef.current
@@ -216,291 +425,938 @@ const GameCanvas = ({
     const currentGold = gs?.gold ?? 200
     const currentPhase = gs?.phase || 'waiting'
     const currentIsGameOver = currentPhase === 'game_over'
+    const t = performance.now() / 1000
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    drawGrid(ctx)
+    // 1. Static layers (gradient, grid, bulkheads, portal pads) from the
+    //    offscreen canvas — re-rendered only when the map changes.
+    ctx.drawImage(ensureBackground(gs), 0, 0)
 
-    if (gs?.spawn_point) drawSpawnPoint(ctx, gs.spawn_point)
-    if (gs?.goal_point) drawGoalPoint(ctx, gs.goal_point)
+    // 2. Portal animations (goal gate goes alarm-red when health is low).
+    const lowHealth = (gs?.health ?? 100) <= 30
+    if (gs?.spawn_point) drawSpawnGate(ctx, gs.spawn_point, t)
+    if (gs?.goal_point) drawGoalGate(ctx, gs.goal_point, t, lowHealth)
 
-    currentTowers.forEach(tower => { if (tower.current_target) drawTowerRange(ctx, tower) })
-    currentProjectiles.forEach(p => drawProjectile(ctx, p))
-    currentTowers.forEach(tower => drawTower(ctx, tower, selTower?.id === tower.id))
-    currentEnemies.forEach(enemy => drawEnemy(ctx, enemy))
-    currentFlashes.forEach(flash => drawMuzzleFlash(ctx, flash))
+    // Lookup tables for this frame.
+    const towerTypeById = new Map<number, string>()
+    const towerByCell = new Map<string, Tower>()
+    currentTowers.forEach(tw => {
+      towerTypeById.set(tw.id, tw.tower_type)
+      towerByCell.set(`${tw.position.x},${tw.position.y}`, tw)
+    })
+    const enemyById = new Map<number, Enemy>()
+    currentEnemies.forEach(e => enemyById.set(e.id, e))
+
+    // 3. Range rings + hover underlay go under the entities.
+    const liveSel = selTower ? currentTowers.find(tw => tw.id === selTower.id) : undefined
+    if (liveSel) {
+      drawRangeRing(ctx, liveSel.position, liveSel.range, TOWER_COLORS[liveSel.tower_type], t, 0.7)
+    }
+    let hoverBlocked = false
+    const hoverPlacing = hovered && !currentIsGameOver && !selTower && selType !== null &&
+      !towerByCell.has(`${hovered.x},${hovered.y}`)
+    if (hoverPlacing && hovered && selType) {
+      hoverBlocked =
+        (gs?.obstacles ?? []).some(o => o.x === hovered.x && o.y === hovered.y) ||
+        (gs?.spawn_point?.x === hovered.x && gs?.spawn_point?.y === hovered.y) ||
+        (gs?.goal_point?.x === hovered.x && gs?.goal_point?.y === hovered.y)
+      const canAfford = currentGold >= TOWER_COSTS[selType]
+      drawHoverUnderlay(ctx, hovered, selType, t, hoverBlocked || !canAfford)
+    }
+
+    // 4. Entities.
+    currentTowers.forEach(tower => drawTower(ctx, tower, t, 1))
+    const nextProjHeadings = new Map<number, { x: number; y: number; angle: number }>()
+    currentProjectiles.forEach(p => drawProjectile(ctx, p, t, towerTypeById, enemyById, nextProjHeadings))
+    projHeadingsRef.current = nextProjHeadings
+
+    const nextEnemyHeadings = new Map<number, { x: number; y: number; angle: number }>()
+    currentEnemies.forEach(enemy => drawEnemy(ctx, enemy, t, nextEnemyHeadings))
+    enemyHeadingsRef.current = nextEnemyHeadings
+
+    // 5. Effects.
+    currentFlashes.forEach(flash => drawMuzzleFlash(ctx, flash, towerByCell))
     currentExplosions.forEach(explosion => drawExplosion(ctx, explosion))
 
-    if (selTower) {
-      const t = currentTowers.find(t => t.id === selTower.id)
-      if (t) drawSelectedTowerHighlight(ctx, t)
-    }
+    // 6. Target reticles: corner ticks on each tower's current victim.
+    currentTowers.forEach(tw => {
+      if (!tw.current_target) return
+      const victim = enemyById.get(tw.current_target)
+      if (victim) drawReticle(ctx, victim, TOWER_COLORS[tw.tower_type])
+    })
 
-    const isOccupied = (pos: Position) => currentTowers.some(t => t.position.x === pos.x && t.position.y === pos.y)
-
-    if (hovered && !isOccupied(hovered) && !currentIsGameOver && !selTower && selType !== null) {
-      drawHighlight(ctx, hovered)
-      drawTowerPreview(ctx, hovered, selType, currentGold)
-    }
-  }
-
-  const drawGrid = (ctx: CanvasRenderingContext2D) => {
-    ctx.strokeStyle = '#444'
-    ctx.lineWidth = 1
-    for (let x = 0; x <= GRID_WIDTH; x++) {
-      ctx.beginPath()
-      ctx.moveTo(x * CELL_SIZE, 0)
-      ctx.lineTo(x * CELL_SIZE, GRID_HEIGHT * CELL_SIZE)
-      ctx.stroke()
-    }
-    for (let y = 0; y <= GRID_HEIGHT; y++) {
-      ctx.beginPath()
-      ctx.moveTo(0, y * CELL_SIZE)
-      ctx.lineTo(GRID_WIDTH * CELL_SIZE, y * CELL_SIZE)
-      ctx.stroke()
+    // 7. Selection brackets + ghost preview on top.
+    if (liveSel) drawSelectionBrackets(ctx, liveSel.position)
+    if (hoverPlacing && hovered && selType) {
+      drawGhostTower(ctx, hovered, selType, t, hoverBlocked, currentGold >= TOWER_COSTS[selType])
     }
   }
+  renderRef.current = render
 
-  const drawSpawnPoint = (ctx: CanvasRenderingContext2D, pos: Position) => {
+  // ——— static background (rendered once per map) ———
+
+  const ensureBackground = (gs?: GameState): HTMLCanvasElement => {
+    const obstacles = gs?.obstacles ?? []
+    const key = `${obstacles.length}|${gs?.spawn_point?.x},${gs?.spawn_point?.y}|${gs?.goal_point?.x},${gs?.goal_point?.y}`
+    if (bgCanvasRef.current && bgKeyRef.current === key) return bgCanvasRef.current
+
+    const c = document.createElement('canvas')
+    c.width = GRID_WIDTH * CELL_SIZE
+    c.height = GRID_HEIGHT * CELL_SIZE
+    const b = c.getContext('2d')!
+
+    // Base gradient + center glow.
+    const grad = b.createLinearGradient(0, 0, 0, c.height)
+    grad.addColorStop(0, PALETTE.bgNavy)
+    grad.addColorStop(1, PALETTE.bgDeep)
+    b.fillStyle = grad
+    b.fillRect(0, 0, c.width, c.height)
+    const glow = b.createRadialGradient(c.width / 2, c.height / 2, 0, c.width / 2, c.height / 2, 420)
+    glow.addColorStop(0, hexAlpha(PALETTE.bgGlow, 0.35))
+    glow.addColorStop(1, 'rgba(0,0,0,0)')
+    b.fillStyle = glow
+    b.fillRect(0, 0, c.width, c.height)
+
+    // Grid: minor every cell, brighter major every 5 cells, '+' ticks at
+    // major intersections.
+    b.lineWidth = 1
+    for (const major of [false, true]) {
+      b.strokeStyle = major ? PALETTE.gridMajor : PALETTE.gridMinor
+      b.beginPath()
+      for (let x = 0; x <= GRID_WIDTH; x++) {
+        if (x % 5 === 0 !== major) continue
+        b.moveTo(x * CELL_SIZE + 0.5, 0)
+        b.lineTo(x * CELL_SIZE + 0.5, c.height)
+      }
+      for (let y = 0; y <= GRID_HEIGHT; y++) {
+        if (y % 5 === 0 !== major) continue
+        b.moveTo(0, y * CELL_SIZE + 0.5)
+        b.lineTo(c.width, y * CELL_SIZE + 0.5)
+      }
+      b.stroke()
+    }
+    b.strokeStyle = PALETTE.gridNode
+    b.beginPath()
+    for (let x = 5; x < GRID_WIDTH; x += 5) {
+      for (let y = 5; y < GRID_HEIGHT; y += 5) {
+        const px = x * CELL_SIZE + 0.5
+        const py = y * CELL_SIZE + 0.5
+        b.moveTo(px - 3, py)
+        b.lineTo(px + 3, py)
+        b.moveTo(px, py - 3)
+        b.lineTo(px, py + 3)
+      }
+    }
+    b.stroke()
+
+    drawBulkheads(b, obstacles)
+
+    // Portal cell tints (the animated gates render per frame).
+    if (gs?.spawn_point) {
+      b.fillStyle = hexAlpha(PALETTE.spawn, 0.08)
+      b.fillRect(gs.spawn_point.x * CELL_SIZE, gs.spawn_point.y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+    }
+    if (gs?.goal_point) {
+      b.fillStyle = hexAlpha(PALETTE.goal, 0.08)
+      b.fillRect(gs.goal_point.x * CELL_SIZE, gs.goal_point.y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+    }
+
+    // Vignette.
+    const vin = b.createRadialGradient(c.width / 2, c.height / 2, Math.min(c.width, c.height) / 2 - 40, c.width / 2, c.height / 2, Math.max(c.width, c.height) / 2 + 80)
+    vin.addColorStop(0, 'rgba(0,0,0,0)')
+    vin.addColorStop(1, 'rgba(0,0,0,0.35)')
+    b.fillStyle = vin
+    b.fillRect(0, 0, c.width, c.height)
+
+    bgCanvasRef.current = c
+    bgKeyRef.current = key
+    return c
+  }
+
+  // Obstacles render as merged "containment bulkheads": one rounded plate per
+  // contiguous vertical run, with hatching, a power seam, and hazard stripes
+  // on the corridor-facing end cells. shadowBlur is allowed here only — this
+  // draws once per map, not per frame.
+  const drawBulkheads = (b: CanvasRenderingContext2D, obstacles: Position[]) => {
+    const byX = new Map<number, number[]>()
+    obstacles.forEach(o => {
+      const ys = byX.get(o.x) ?? []
+      ys.push(o.y)
+      byX.set(o.x, ys)
+    })
+    byX.forEach((ys, x) => {
+      ys.sort((a, c) => a - c)
+      let start = ys[0]
+      let prev = ys[0]
+      const flush = (y0: number, y1: number) => {
+        const px = x * CELL_SIZE + 2
+        const py = y0 * CELL_SIZE + 2
+        const w = CELL_SIZE - 4
+        const h = (y1 - y0 + 1) * CELL_SIZE - 4
+
+        const fill = b.createLinearGradient(0, py, 0, py + h)
+        fill.addColorStop(0, PALETTE.wallFillHi)
+        fill.addColorStop(1, PALETTE.wallFillLo)
+        roundRectPath(b, px, py, w, h, 6)
+        b.fillStyle = fill
+        b.fill()
+
+        b.save()
+        roundRectPath(b, px, py, w, h, 6)
+        b.clip()
+        b.strokeStyle = PALETTE.wallHatch
+        b.lineWidth = 1
+        b.beginPath()
+        for (let d = -h; d < w; d += 8) {
+          b.moveTo(px + d, py + h)
+          b.lineTo(px + d + h, py)
+        }
+        b.stroke()
+        // Power seam + node dots at each cell center.
+        b.strokeStyle = hexAlpha(PALETTE.wallEdge, 0.5)
+        b.lineWidth = 2
+        b.beginPath()
+        b.moveTo(px + w / 2, py + 6)
+        b.lineTo(px + w / 2, py + h - 6)
+        b.stroke()
+        b.fillStyle = hexAlpha(PALETTE.wallNode, 0.8)
+        for (let y = y0; y <= y1; y++) {
+          b.beginPath()
+          b.arc(x * CELL_SIZE + CELL_SIZE / 2, y * CELL_SIZE + CELL_SIZE / 2, 2, 0, Math.PI * 2)
+          b.fill()
+        }
+        // Hazard stripes on ends that face a corridor gap (not the border).
+        b.strokeStyle = hexAlpha(PALETTE.hazard, 0.5)
+        b.lineWidth = 3
+        const stripe = (cy: number) => {
+          b.beginPath()
+          for (let i = 0; i < 3; i++) {
+            const sx = px + 4 + i * 11
+            b.moveTo(sx, cy + 14)
+            b.lineTo(sx + 10, cy + 4)
+          }
+          b.stroke()
+        }
+        if (y0 > 0) stripe(y0 * CELL_SIZE + 2)
+        if (y1 < GRID_HEIGHT - 1) stripe(y1 * CELL_SIZE + CELL_SIZE - 20)
+        b.restore()
+
+        b.save()
+        b.shadowColor = '#1E6FB8'
+        b.shadowBlur = 14
+        roundRectPath(b, px, py, w, h, 6)
+        b.strokeStyle = PALETTE.wallEdge
+        b.lineWidth = 2
+        b.stroke()
+        b.restore()
+        roundRectPath(b, px + 4, py + 4, w - 8, h - 8, 4)
+        b.strokeStyle = PALETTE.wallInner
+        b.lineWidth = 1
+        b.stroke()
+      }
+      for (let i = 1; i < ys.length; i++) {
+        if (ys[i] === prev + 1) {
+          prev = ys[i]
+        } else {
+          flush(start, prev)
+          start = ys[i]
+          prev = ys[i]
+        }
+      }
+      flush(start, prev)
+    })
+  }
+
+  // ——— portals ———
+
+  const drawSpawnGate = (ctx: CanvasRenderingContext2D, pos: Position, t: number) => {
     const x = pos.x * CELL_SIZE + CELL_SIZE / 2
     const y = pos.y * CELL_SIZE + CELL_SIZE / 2
-    ctx.fillStyle = 'rgba(255, 100, 100, 0.3)'
-    ctx.fillRect(pos.x * CELL_SIZE, pos.y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
-    ctx.fillStyle = '#ff6464'
-    ctx.font = 'bold 20px Arial'
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('S', x, y)
-  }
-
-  const drawGoalPoint = (ctx: CanvasRenderingContext2D, pos: Position) => {
-    const x = pos.x * CELL_SIZE + CELL_SIZE / 2
-    const y = pos.y * CELL_SIZE + CELL_SIZE / 2
-    ctx.fillStyle = 'rgba(100, 255, 100, 0.3)'
-    ctx.fillRect(pos.x * CELL_SIZE, pos.y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
-    ctx.fillStyle = '#64ff64'
-    ctx.font = 'bold 20px Arial'
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('G', x, y)
-  }
-
-  const drawHighlight = (ctx: CanvasRenderingContext2D, pos: Position) => {
-    ctx.fillStyle = 'rgba(100, 200, 255, 0.3)'
-    ctx.fillRect(pos.x * CELL_SIZE, pos.y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
-  }
-
-  const drawTowerRange = (ctx: CanvasRenderingContext2D, tower: Tower) => {
-    const x = tower.position.x * CELL_SIZE + CELL_SIZE / 2
-    const y = tower.position.y * CELL_SIZE + CELL_SIZE / 2
-    ctx.strokeStyle = 'rgba(255, 100, 100, 0.3)'
+    ctx.strokeStyle = PALETTE.spawn
     ctx.lineWidth = 2
     ctx.beginPath()
-    ctx.arc(x, y, tower.range * CELL_SIZE, 0, Math.PI * 2)
+    ctx.arc(x, y, 13, 0, Math.PI * 2)
     ctx.stroke()
-  }
-
-  const drawSelectedTowerHighlight = (ctx: CanvasRenderingContext2D, tower: Tower) => {
-    const x = tower.position.x * CELL_SIZE + CELL_SIZE / 2
-    const y = tower.position.y * CELL_SIZE + CELL_SIZE / 2
-    // Selection ring sits outside all upgrade rings (level 4 outermost is CELL_SIZE/3 + 16)
-    const selectionRadius = CELL_SIZE / 3 + 22
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'
-    ctx.lineWidth = 2
-    ctx.setLineDash([5, 4])
-    ctx.beginPath()
-    ctx.arc(x, y, selectionRadius, 0, Math.PI * 2)
-    ctx.stroke()
-    ctx.setLineDash([])
-    // Range circle
-    ctx.strokeStyle = 'rgba(100, 200, 255, 0.5)'
-    ctx.lineWidth = 2
-    ctx.setLineDash([6, 3])
-    ctx.beginPath()
-    ctx.arc(x, y, tower.range * CELL_SIZE, 0, Math.PI * 2)
-    ctx.stroke()
-    ctx.setLineDash([])
-  }
-
-  const drawTower = (ctx: CanvasRenderingContext2D, tower: Tower, isSelected: boolean) => {
-    const x = tower.position.x * CELL_SIZE + CELL_SIZE / 2
-    const y = tower.position.y * CELL_SIZE + CELL_SIZE / 2
-    const color = TOWER_COLORS[tower.tower_type] || '#4CAF50'
-
-    // Body — always type color, never white (selection shown by outer ring only)
-    ctx.fillStyle = color
-    ctx.beginPath()
-    ctx.arc(x, y, CELL_SIZE / 3, 0, Math.PI * 2)
-    ctx.fill()
-
-    // Barrel
-    const rotation = tower.rotation || 0
     ctx.save()
     ctx.translate(x, y)
-    ctx.rotate(rotation)
-    ctx.fillStyle = '#FFF'
-    ctx.fillRect(0, -4, CELL_SIZE / 2.5, 8)
-    ctx.fillStyle = '#CCC'
-    ctx.fillRect(CELL_SIZE / 3, -3, CELL_SIZE / 6, 6)
+    ctx.rotate(t * 0.9)
+    ctx.strokeStyle = PALETTE.spawnLight
+    ctx.lineWidth = 1.5
+    ctx.stroke(regularPolyPath(8, 6, 0))
     ctx.restore()
-
-    // Upgrade rings — gold, radiating outward, fading per ring
-    const level = tower.level || 1
-    if (level >= 2) {
-      ctx.strokeStyle = '#FFD700'
-      ctx.lineWidth = 2.5
-      ctx.beginPath()
-      ctx.arc(x, y, CELL_SIZE / 3 + 6, 0, Math.PI * 2)
-      ctx.stroke()
-    }
-    if (level >= 3) {
-      ctx.strokeStyle = 'rgba(255, 215, 0, 0.6)'
-      ctx.lineWidth = 1.5
-      ctx.beginPath()
-      ctx.arc(x, y, CELL_SIZE / 3 + 11, 0, Math.PI * 2)
-      ctx.stroke()
-    }
-    if (level >= 4) {
-      ctx.strokeStyle = 'rgba(255, 215, 0, 0.35)'
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.arc(x, y, CELL_SIZE / 3 + 16, 0, Math.PI * 2)
-      ctx.stroke()
-    }
-
-    // Active target indicator (only when not selected)
-    if (tower.current_target && !isSelected) {
-      ctx.strokeStyle = '#ff0000'
-      ctx.lineWidth = 2
-      ctx.beginPath()
-      ctx.arc(x, y, CELL_SIZE / 2.5, 0, Math.PI * 2)
-      ctx.stroke()
-    }
-  }
-
-  const drawEnemy = (ctx: CanvasRenderingContext2D, enemy: Enemy) => {
-    const x = enemy.position.x * CELL_SIZE + CELL_SIZE / 2
-    const y = enemy.position.y * CELL_SIZE + CELL_SIZE / 2
-    const sizes: Record<string, number> = {
-      basic: CELL_SIZE / 4, fast: CELL_SIZE / 5, tank: CELL_SIZE / 2.5, flying: CELL_SIZE / 4.5, boss: CELL_SIZE / 2
-    }
-    const size = sizes[enemy.enemy_type] || CELL_SIZE / 4
-    const isSlowed = (enemy.slow_duration ?? 0) > 0
-
-    ctx.fillStyle = isSlowed ? '#42A5F5' : (ENEMY_COLORS[enemy.enemy_type] || '#ff4444')
+    // Pulse ring.
+    ctx.globalAlpha = 0.35
+    ctx.strokeStyle = PALETTE.spawn
+    ctx.lineWidth = 1.5
     ctx.beginPath()
-    ctx.arc(x, y, size, 0, Math.PI * 2)
-    ctx.fill()
-
-    if (isSlowed) {
-      ctx.strokeStyle = '#90CAF9'
-      ctx.lineWidth = 2
-      ctx.beginPath()
-      ctx.arc(x, y, size + 3, 0, Math.PI * 2)
-      ctx.stroke()
-    }
-
-    const barWidth = CELL_SIZE * 0.8
-    const barHeight = 4
-    const barX = x - barWidth / 2
-    const barY = y - size - 8
-    ctx.fillStyle = '#ff0000'
-    ctx.fillRect(barX, barY, barWidth, barHeight)
-    ctx.fillStyle = '#00ff00'
-    ctx.fillRect(barX, barY, barWidth * (enemy.health / enemy.max_health), barHeight)
-    ctx.strokeStyle = '#000'
-    ctx.lineWidth = 1
-    ctx.strokeRect(barX, barY, barWidth, barHeight)
-  }
-
-  const drawProjectile = (ctx: CanvasRenderingContext2D, projectile: any) => {
-    const x = projectile.position.x * CELL_SIZE + CELL_SIZE / 2
-    const y = projectile.position.y * CELL_SIZE + CELL_SIZE / 2
-    const isAOE = !!projectile.is_aoe
-    const color = isAOE ? '#FF9800' : '#ffff00'
-
-    ctx.fillStyle = color
-    ctx.shadowBlur = 15
-    ctx.shadowColor = color
-    ctx.beginPath()
-    ctx.arc(x, y, isAOE ? 6 : 5, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.shadowBlur = 0
-    ctx.strokeStyle = isAOE ? 'rgba(255, 152, 0, 0.6)' : 'rgba(255, 255, 0, 0.6)'
-    ctx.lineWidth = 3
-    ctx.lineCap = 'round'
-    ctx.beginPath()
-    ctx.moveTo(x - 10, y)
-    ctx.lineTo(x, y)
+    ctx.arc(x, y, 13 + 3 * Math.sin((Math.PI * 2 * t) / 1.6), 0, Math.PI * 2)
     ctx.stroke()
+    ctx.globalAlpha = 1
+    // Marching ">" chevrons fading out toward the corridor.
+    ctx.strokeStyle = PALETTE.spawnLight
+    ctx.lineWidth = 1.5
+    for (let i = 0; i < 3; i++) {
+      const cx = -6 + ((t * 20 + i * 8) % 24)
+      ctx.globalAlpha = Math.max(0, 1 - (cx + 6) / 24)
+      ctx.beginPath()
+      ctx.moveTo(x + cx - 3, y - 3)
+      ctx.lineTo(x + cx, y)
+      ctx.lineTo(x + cx - 3, y + 3)
+      ctx.stroke()
+    }
+    ctx.globalAlpha = 1
   }
 
-  const drawMuzzleFlash = (ctx: CanvasRenderingContext2D, flash: any) => {
-    const x = flash.position.x * CELL_SIZE + CELL_SIZE / 2
-    const y = flash.position.y * CELL_SIZE + CELL_SIZE / 2
-    const intensity = Math.min(flash.duration / 0.1, 1)
-    ctx.fillStyle = `rgba(255, 255, 150, ${intensity})`
-    ctx.shadowBlur = 25
-    ctx.shadowColor = '#ffff00'
-    ctx.beginPath()
-    ctx.arc(x, y, 12 * intensity, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.shadowBlur = 0
-  }
-
-  const drawExplosion = (ctx: CanvasRenderingContext2D, explosion: any) => {
-    const x = explosion.position.x * CELL_SIZE + CELL_SIZE / 2
-    const y = explosion.position.y * CELL_SIZE + CELL_SIZE / 2
-    const progress = 1 - (explosion.duration / 0.3)
-    const radius = explosion.radius * CELL_SIZE * (0.5 + progress * 0.5)
-    ctx.strokeStyle = `rgba(255, 100, 0, ${1 - progress})`
-    ctx.lineWidth = 4
-    ctx.beginPath()
-    ctx.arc(x, y, radius, 0, Math.PI * 2)
-    ctx.stroke()
-    ctx.fillStyle = `rgba(255, 200, 0, ${(1 - progress) * 0.7})`
-    ctx.beginPath()
-    ctx.arc(x, y, radius * 0.6, 0, Math.PI * 2)
-    ctx.fill()
-  }
-
-  const drawTowerPreview = (ctx: CanvasRenderingContext2D, pos: Position, towerType: TowerType, currentGold: number) => {
+  const drawGoalGate = (ctx: CanvasRenderingContext2D, pos: Position, t: number, alarm: boolean) => {
     const x = pos.x * CELL_SIZE + CELL_SIZE / 2
     const y = pos.y * CELL_SIZE + CELL_SIZE / 2
-    const canAfford = currentGold >= TOWER_COSTS[towerType]
-
-    ctx.globalAlpha = 0.5
-    ctx.fillStyle = canAfford ? TOWER_COLORS[towerType] : '#666'
-    ctx.beginPath()
-    ctx.arc(x, y, CELL_SIZE / 3, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.globalAlpha = 1.0
-
-    ctx.strokeStyle = canAfford ? 'rgba(100, 200, 255, 0.4)' : 'rgba(200,50,50,0.3)'
+    const accent = alarm ? PALETTE.hpLow : PALETTE.goal
+    const light = alarm ? PALETTE.hpLow : PALETTE.goalLight
+    const rate = alarm ? 2 : 1
+    ctx.strokeStyle = accent
     ctx.lineWidth = 2
     ctx.beginPath()
-    ctx.arc(x, y, TOWER_RANGES[towerType] * CELL_SIZE, 0, Math.PI * 2)
+    ctx.arc(x, y, 13, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.save()
+    ctx.translate(x, y)
+    ctx.rotate(-t * 0.9 * rate)
+    ctx.strokeStyle = light
+    ctx.lineWidth = 1.5
+    ctx.stroke(regularPolyPath(8, 6, 0))
+    ctx.restore()
+    ctx.globalAlpha = 0.35
+    ctx.strokeStyle = accent
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.arc(x, y, 13 + 3 * Math.sin((Math.PI * 2 * t * rate) / 1.6), 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.globalAlpha = 1
+    // Core.
+    ctx.save()
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.drawImage(glowSprite(accent), x - 9, y - 9, 18, 18)
+    ctx.fillStyle = PALETTE.white
+    ctx.beginPath()
+    ctx.arc(x, y, 4, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
+
+  // ——— rings, brackets, hover ———
+
+  const drawRangeRing = (ctx: CanvasRenderingContext2D, pos: Position, range: number, accent: string, t: number, alpha: number) => {
+    const x = pos.x * CELL_SIZE + CELL_SIZE / 2
+    const y = pos.y * CELL_SIZE + CELL_SIZE / 2
+    const r = range * CELL_SIZE
+    ctx.fillStyle = hexAlpha(accent, 0.05)
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = hexAlpha(accent, alpha)
+    ctx.lineWidth = 1.5
+    ctx.setLineDash([10, 6])
+    ctx.lineDashOffset = -((t * 20) % 16)
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.lineDashOffset = 0
+    ctx.strokeStyle = hexAlpha(accent, 0.15)
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.arc(x, y, r - 3, 0, Math.PI * 2)
     ctx.stroke()
   }
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const drawSelectionBrackets = (ctx: CanvasRenderingContext2D, pos: Position) => {
+    const px = pos.x * CELL_SIZE
+    const py = pos.y * CELL_SIZE
+    const inset = 3
+    const arm = 8
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    for (const [cx, cy, dx, dy] of [
+      [px + inset, py + inset, 1, 1],
+      [px + CELL_SIZE - inset, py + inset, -1, 1],
+      [px + CELL_SIZE - inset, py + CELL_SIZE - inset, -1, -1],
+      [px + inset, py + CELL_SIZE - inset, 1, -1],
+    ]) {
+      ctx.moveTo(cx + dx * arm, cy)
+      ctx.lineTo(cx, cy)
+      ctx.lineTo(cx, cy + dy * arm)
+    }
+    ctx.stroke()
+  }
+
+  const drawHoverUnderlay = (ctx: CanvasRenderingContext2D, pos: Position, towerType: TowerType, t: number, invalid: boolean) => {
+    const px = pos.x * CELL_SIZE
+    const py = pos.y * CELL_SIZE
+    const accent = invalid ? PALETTE.danger : TOWER_COLORS[towerType]
+    ctx.fillStyle = hexAlpha(accent, 0.08)
+    ctx.fillRect(px, py, CELL_SIZE, CELL_SIZE)
+    ctx.strokeStyle = accent
+    ctx.lineWidth = 1.5
+    ctx.setLineDash([4, 3])
+    ctx.strokeRect(px + 3.5, py + 3.5, CELL_SIZE - 7, CELL_SIZE - 7)
+    ctx.setLineDash([])
+    if (!invalid) {
+      drawRangeRing(ctx, pos, TOWER_RANGES[towerType], accent, t, 0.4)
+    }
+  }
+
+  const drawGhostTower = (ctx: CanvasRenderingContext2D, pos: Position, towerType: TowerType, t: number, blocked: boolean, canAfford: boolean) => {
+    const invalid = blocked || !canAfford
+    ctx.globalAlpha = invalid ? 0.25 : 0.45
+    drawTower(ctx, {
+      id: -1,
+      position: { x: pos.x, y: pos.y },
+      tower_type: towerType,
+      level: 1,
+      range: TOWER_RANGES[towerType],
+      rotation: 0,
+    }, t, 1)
+    ctx.globalAlpha = 1
+    if (invalid) {
+      const px = pos.x * CELL_SIZE
+      const py = pos.y * CELL_SIZE
+      ctx.strokeStyle = PALETTE.danger
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(px + 6, py + 6)
+      ctx.lineTo(px + CELL_SIZE - 6, py + CELL_SIZE - 6)
+      ctx.stroke()
+    }
+  }
+
+  // ——— towers ———
+
+  const drawTower = (ctx: CanvasRenderingContext2D, tower: Tower, t: number, alphaScale: number) => {
+    const x = tower.position.x * CELL_SIZE + CELL_SIZE / 2
+    const y = tower.position.y * CELL_SIZE + CELL_SIZE / 2
+    const type = tower.tower_type
+    const accent = TOWER_COLORS[type] || TOWER_COLORS.basic
+    const light = TOWER_LIGHT[type] || PALETTE.white
+    const level = tower.level || 1
+    const base = SHAPES.towerBase[type] || SHAPES.towerBase.basic
+
+    ctx.save()
+    ctx.translate(x, y)
+
+    // Base plate: dark fill + two-pass accent edge glow. Never rotates.
+    ctx.fillStyle = PALETTE.platefill
+    ctx.fill(base)
+    ctx.strokeStyle = hexAlpha(accent, 0.2 * alphaScale)
+    ctx.lineWidth = 5
+    ctx.stroke(base)
+    ctx.strokeStyle = accent
+    ctx.lineWidth = 1.5
+    ctx.stroke(base)
+    if (level >= 4) {
+      ctx.strokeStyle = hexAlpha(PALETTE.white, 0.8)
+      ctx.lineWidth = 1
+      ctx.stroke(SHAPES.towerBaseInset[type] || SHAPES.towerBaseInset.basic)
+    }
+
+    // Slow tower ambient ring: dashed crawl (the tower's motion accent).
+    if (type === 'slow') {
+      ctx.strokeStyle = hexAlpha(TOWER_LIGHT.slow, 0.5)
+      ctx.lineWidth = 1
+      ctx.setLineDash([3, 5])
+      ctx.lineDashOffset = -((t * 6) % 8)
+      ctx.beginPath()
+      ctx.arc(0, 0, 13, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.lineDashOffset = 0
+    }
+
+    // Turret: rotates toward the target and scales up with level.
+    ctx.rotate(tower.rotation || 0)
+    const s = 1 + 0.06 * (level - 1)
+    ctx.scale(s, s)
+    switch (type) {
+      case 'sniper':
+        ctx.fillStyle = accent
+        ctx.fillRect(2, -2.5, 22, 1.5)
+        ctx.fillRect(2, 1, 22, 1.5)
+        ctx.fillRect(22, -3, 2, 6)
+        ctx.strokeStyle = light
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(4, 0)
+        ctx.lineTo(22, 0)
+        ctx.stroke()
+        ctx.fillStyle = accent
+        ctx.beginPath()
+        ctx.arc(0, 0, 3.5, 0, Math.PI * 2)
+        ctx.fill()
+        break
+      case 'splash':
+        ctx.fillStyle = PALETTE.turretMetal
+        ctx.fillRect(0, -5, 12, 10)
+        ctx.strokeStyle = accent
+        ctx.lineWidth = 1.5
+        ctx.strokeRect(0, -5, 12, 10)
+        ctx.fillStyle = PALETTE.bgDeep
+        ctx.beginPath()
+        ctx.arc(12, 0, 2.5, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.strokeStyle = accent
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.arc(0, 0, 6, 0, Math.PI * 2)
+        ctx.stroke()
+        ctx.fillStyle = accent
+        ctx.beginPath()
+        ctx.arc(0, 0, 2, 0, Math.PI * 2)
+        ctx.fill()
+        break
+      case 'slow': {
+        // Three emitter vanes at 120°.
+        ctx.fillStyle = PALETTE.turretMetal
+        ctx.strokeStyle = accent
+        ctx.lineWidth = 1.5
+        for (let i = 0; i < 3; i++) {
+          ctx.save()
+          ctx.rotate((i * 2 * Math.PI) / 3)
+          const vane = polyPath([[6, -3], [15, 0], [6, 3]])
+          ctx.fill(vane)
+          ctx.stroke(vane)
+          ctx.restore()
+        }
+        break
+      }
+      default: { // basic
+        const barrelLen = 13 + level
+        ctx.fillStyle = PALETTE.turretMetal
+        ctx.fillRect(4, -3, barrelLen, 6)
+        ctx.strokeStyle = accent
+        ctx.lineWidth = 1.5
+        ctx.strokeRect(4, -3, barrelLen, 6)
+        ctx.strokeStyle = light
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(4 + barrelLen, -3)
+        ctx.lineTo(4 + barrelLen, 3)
+        ctx.stroke()
+        ctx.fillStyle = accent
+        ctx.beginPath()
+        ctx.arc(0, 0, 4.5, 0, Math.PI * 2)
+        ctx.fill()
+        break
+      }
+    }
+    ctx.restore()
+
+    // Slow tower static snowflake overlay (screen frame, not rotated).
+    if (type === 'slow') {
+      ctx.strokeStyle = TOWER_LIGHT.slow
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      for (let i = 0; i < 6; i++) {
+        const a = (i * Math.PI) / 3
+        ctx.moveTo(x + 2 * Math.cos(a), y + 2 * Math.sin(a))
+        ctx.lineTo(x + 7 * Math.cos(a), y + 7 * Math.sin(a))
+      }
+      ctx.stroke()
+      ctx.fillStyle = TOWER_LIGHT.slow
+      ctx.beginPath()
+      ctx.arc(x, y, 2.5, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    // Upgrade pips: 4 outlined slots, first `level` filled (screen frame).
+    ctx.strokeStyle = hexAlpha(accent, 0.2)
+    ctx.fillStyle = accent
+    ctx.lineWidth = 1
+    for (let i = 0; i < 4; i++) {
+      const px = Math.round(x - 12 + i * 8) - 2
+      const py = Math.round(y + 17) - 2
+      if (i < level) ctx.fillRect(px, py, 4, 4)
+      else ctx.strokeRect(px + 0.5, py + 0.5, 3, 3)
+    }
+  }
+
+  // ——— enemies ———
+
+  const drawEnemy = (ctx: CanvasRenderingContext2D, enemy: Enemy, t: number, next: Map<number, { x: number; y: number; angle: number }>) => {
+    const x = enemy.position.x * CELL_SIZE + CELL_SIZE / 2
+    const y = enemy.position.y * CELL_SIZE + CELL_SIZE / 2
+    const type = enemy.enemy_type
+    const accent = ENEMY_COLORS[type] || ENEMY_COLORS.basic
+    const body = ENEMY_BODY[type] || ENEMY_BODY.basic
+    const R = ENEMY_RADIUS[type] ?? 10
+    const isSlowed = (enemy.slow_duration ?? 0) > 0
+
+    // Heading: smoothed toward the movement direction.
+    const prev = enemyHeadingsRef.current.get(enemy.id)
+    let angle = prev?.angle ?? 0
+    if (prev) {
+      const dx = x - prev.x
+      const dy = y - prev.y
+      if (dx * dx + dy * dy > 0.0016) {
+        angle += shortestAngleDelta(Math.atan2(dy, dx) - angle) * 0.25
+      }
+    }
+    next.set(enemy.id, { x, y, angle })
+
+    ctx.save()
+    ctx.translate(x, y)
+    ctx.rotate(angle)
+    const shape = SHAPES.enemy[type] || SHAPES.enemy.basic
+    ctx.fillStyle = body
+    ctx.fill(shape)
+    if (type === 'tank' || type === 'boss') {
+      ctx.strokeStyle = hexAlpha(accent, 0.2)
+      ctx.lineWidth = 5.5
+      ctx.stroke(shape)
+      ctx.strokeStyle = accent
+      ctx.lineWidth = 2.5
+      ctx.stroke(shape)
+    } else {
+      ctx.strokeStyle = accent
+      ctx.lineWidth = 2
+      ctx.stroke(shape)
+    }
+    switch (type) {
+      case 'basic':
+        ctx.strokeStyle = '#FF8A94'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(-6, -3)
+        ctx.lineTo(-6, 3)
+        ctx.stroke()
+        break
+      case 'fast':
+        ctx.strokeStyle = hexAlpha('#FFC98A', 0.5)
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(-8, -3)
+        ctx.lineTo(-14, -3)
+        ctx.moveTo(-8, 3)
+        ctx.lineTo(-14, 3)
+        ctx.stroke()
+        break
+      case 'tank':
+        ctx.strokeStyle = '#FF9A6B'
+        ctx.lineWidth = 1.25
+        ctx.stroke(SHAPES.enemy.tankInner)
+        ctx.strokeStyle = hexAlpha(accent, 0.4)
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(-2, -9)
+        ctx.lineTo(-2, 9)
+        ctx.moveTo(6, -9)
+        ctx.lineTo(6, 9)
+        ctx.stroke()
+        break
+      default:
+        break
+    }
+    ctx.restore()
+
+    if (type === 'boss') {
+      // Pulsing white core + time-rotating blade ring (not heading-locked).
+      ctx.save()
+      ctx.globalAlpha = 0.7 + 0.3 * Math.sin(t * 3)
+      ctx.drawImage(glowSprite(PALETTE.white), x - 10, y - 10, 20, 20)
+      ctx.fillStyle = PALETTE.white
+      ctx.beginPath()
+      ctx.arc(x, y, 4, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.restore()
+      ctx.strokeStyle = accent
+      ctx.lineWidth = 3
+      for (let i = 0; i < 4; i++) {
+        const a = (i * Math.PI) / 2 + t * 1.2
+        ctx.beginPath()
+        ctx.arc(x, y, 16, a, a + (40 * Math.PI) / 180)
+        ctx.stroke()
+      }
+    }
+
+    // Stasis cage: shape-based debuff tell — the body is never recolored.
+    if (isSlowed) {
+      ctx.save()
+      ctx.translate(x, y)
+      ctx.rotate(t * 0.8)
+      const cage = regularPolyPath(R + 5, 6, -Math.PI / 2)
+      ctx.fillStyle = 'rgba(61, 139, 255, 0.12)'
+      ctx.fill(cage)
+      ctx.strokeStyle = hexAlpha(PALETTE.slowRing, 0.9)
+      ctx.lineWidth = 1.5
+      ctx.stroke(cage)
+      ctx.strokeStyle = PALETTE.slowCrystal
+      ctx.lineWidth = 3
+      for (const i of [4, 5]) {
+        const a = -Math.PI / 2 + (i * Math.PI) / 3
+        ctx.beginPath()
+        ctx.moveTo((R + 5) * Math.cos(a), (R + 5) * Math.sin(a))
+        ctx.lineTo((R + 8) * Math.cos(a), (R + 8) * Math.sin(a))
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+
+    // Health bar: only once damaged (boss always), screen-aligned.
+    const frac = Math.max(0, Math.min(1, enemy.health / enemy.max_health))
+    if (frac < 1 || type === 'boss') {
+      const barW = type === 'boss' ? 40 : type === 'tank' ? 32 : 26
+      const barH = type === 'boss' ? 5 : 4
+      const bx = Math.round(x - barW / 2)
+      const by = Math.round(y - (R + 7) - barH)
+      ctx.fillStyle = PALETTE.hpTrack
+      ctx.fillRect(bx, by, barW, barH)
+      ctx.fillStyle = frac > 0.5 ? PALETTE.hpHigh : frac > 0.25 ? PALETTE.hpMid : PALETTE.hpLow
+      ctx.fillRect(bx + 1, by + 1, Math.round((barW - 2) * frac), barH - 2)
+      if (type === 'tank' || type === 'boss') {
+        ctx.fillStyle = PALETTE.hpTrack
+        for (const q of [0.25, 0.5, 0.75]) {
+          ctx.fillRect(bx + Math.round(barW * q), by + 1, 1, barH - 2)
+        }
+      }
+      ctx.strokeStyle = PALETTE.hpBorder
+      ctx.lineWidth = 1
+      ctx.strokeRect(bx + 0.5, by + 0.5, barW - 1, barH - 1)
+    }
+  }
+
+  // ——— projectiles & effects ———
+
+  const drawProjectile = (
+    ctx: CanvasRenderingContext2D,
+    projectile: Projectile,
+    t: number,
+    towerTypeById: Map<number, string>,
+    enemyById: Map<number, Enemy>,
+    next: Map<number, { x: number; y: number; angle: number }>,
+  ) => {
+    const x = projectile.position.x * CELL_SIZE + CELL_SIZE / 2
+    const y = projectile.position.y * CELL_SIZE + CELL_SIZE / 2
+    const type = towerTypeById.get(projectile.tower_id) ?? (projectile.is_aoe ? 'splash' : 'basic')
+
+    // Face the target; fall back to the movement delta.
+    const target = enemyById.get(projectile.target_id)
+    let angle: number
+    if (target) {
+      angle = Math.atan2(
+        target.position.y * CELL_SIZE + CELL_SIZE / 2 - y,
+        target.position.x * CELL_SIZE + CELL_SIZE / 2 - x,
+      )
+      next.set(projectile.id, { x, y, angle })
+    } else {
+      const prev = projHeadingsRef.current.get(projectile.id)
+      angle = prev?.angle ?? 0
+      if (prev) {
+        const dx = x - prev.x
+        const dy = y - prev.y
+        if (dx * dx + dy * dy > 0.0016) angle = Math.atan2(dy, dx)
+      }
+      next.set(projectile.id, { x, y, angle })
+    }
+
+    ctx.save()
+    ctx.translate(x, y)
+    ctx.rotate(angle)
+    switch (type) {
+      case 'sniper':
+        ctx.strokeStyle = TOWER_COLORS.sniper
+        ctx.lineWidth = 2
+        ctx.lineCap = 'round'
+        ctx.beginPath()
+        ctx.moveTo(-18, 0)
+        ctx.lineTo(0, 0)
+        ctx.stroke()
+        ctx.drawImage(glowSprite(TOWER_COLORS.sniper), -8, -8, 16, 16)
+        ctx.fillStyle = PALETTE.white
+        ctx.beginPath()
+        ctx.arc(0, 0, 2.5, 0, Math.PI * 2)
+        ctx.fill()
+        break
+      case 'splash':
+        ctx.drawImage(glowSprite(TOWER_COLORS.splash), -14, -14, 28, 28)
+        ctx.globalAlpha = 0.35
+        ctx.fillStyle = TOWER_COLORS.splash
+        ctx.beginPath()
+        ctx.arc(-6, 0, 3, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.globalAlpha = 0.15
+        ctx.beginPath()
+        ctx.arc(-12, 0, 2, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.globalAlpha = 1
+        ctx.fillStyle = TOWER_COLORS.splash
+        ctx.beginPath()
+        ctx.arc(0, 0, 4.5, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.strokeStyle = TOWER_LIGHT.splash
+        ctx.lineWidth = 1
+        ctx.stroke()
+        break
+      case 'slow': {
+        ctx.strokeStyle = hexAlpha(TOWER_COLORS.slow, 0.5)
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        ctx.moveTo(-10, 0)
+        ctx.lineTo(-3, 0)
+        ctx.stroke()
+        ctx.rotate(t * 12 + projectile.id)
+        const shard = polyPath([[5, 0], [0, -3], [-5, 0], [0, 3]])
+        ctx.fillStyle = TOWER_LIGHT.slow
+        ctx.fill(shard)
+        ctx.strokeStyle = TOWER_COLORS.slow
+        ctx.lineWidth = 1
+        ctx.stroke(shard)
+        break
+      }
+      default: // basic
+        ctx.strokeStyle = hexAlpha(TOWER_COLORS.basic, 0.7)
+        ctx.lineWidth = 2
+        ctx.lineCap = 'round'
+        ctx.beginPath()
+        ctx.moveTo(-10, 0)
+        ctx.lineTo(-2, 0)
+        ctx.stroke()
+        ctx.drawImage(glowSprite(TOWER_COLORS.basic), -12, -12, 24, 24)
+        ctx.fillStyle = PALETTE.white
+        ctx.beginPath()
+        ctx.arc(0, 0, 3, 0, Math.PI * 2)
+        ctx.fill()
+        break
+    }
+    ctx.restore()
+  }
+
+  const MUZZLE_OFFSET: Record<string, number> = { basic: 18, sniper: 24, splash: 12, slow: 15 }
+
+  const drawMuzzleFlash = (ctx: CanvasRenderingContext2D, flash: MuzzleFlash, towerByCell: Map<string, Tower>) => {
+    const i = Math.max(0, Math.min(flash.duration / 0.1, 1))
+    const tower = towerByCell.get(`${flash.position.x},${flash.position.y}`)
+    const type = tower?.tower_type ?? 'basic'
+    const accent = TOWER_COLORS[type] || TOWER_COLORS.basic
+    const cx = flash.position.x * CELL_SIZE + CELL_SIZE / 2
+    const cy = flash.position.y * CELL_SIZE + CELL_SIZE / 2
+
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.rotate(tower?.rotation ?? 0)
+    ctx.translate(MUZZLE_OFFSET[type] ?? 18, 0)
+    ctx.globalAlpha = i
+    ctx.drawImage(glowSprite(accent), -10 * i, -10 * i, 20 * i, 20 * i)
+    for (const [dx, dy, len] of [[1, 0, 10 * i], [0, 1, 5 * i], [0, -1, 5 * i]]) {
+      ctx.strokeStyle = accent
+      ctx.lineWidth = 2.5
+      ctx.beginPath()
+      ctx.moveTo(0, 0)
+      ctx.lineTo(dx * len, dy * len)
+      ctx.stroke()
+      ctx.strokeStyle = PALETTE.white
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(0, 0)
+      ctx.lineTo(dx * len, dy * len)
+      ctx.stroke()
+    }
+    ctx.restore()
+    ctx.globalAlpha = 1
+  }
+
+  const drawExplosion = (ctx: CanvasRenderingContext2D, explosion: Explosion) => {
+    const x = explosion.position.x * CELL_SIZE + CELL_SIZE / 2
+    const y = explosion.position.y * CELL_SIZE + CELL_SIZE / 2
+    const isAOE = explosion.radius > 0.6 // server: standard 0.5 / AOE ≥ 1.5
+    const life = isAOE ? 0.4 : 0.3
+    const p = Math.max(0, Math.min(1 - explosion.duration / life, 1))
+
+    ctx.save()
+    ctx.globalCompositeOperation = 'lighter'
+    if (isAOE) {
+      const R = explosion.radius * CELL_SIZE
+      ctx.strokeStyle = hexAlpha(TOWER_COLORS.splash, 1 - p)
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.arc(x, y, R * (0.35 + 0.65 * p), 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.strokeStyle = hexAlpha('#FF9E2C', (1 - p) * 0.6)
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(x, y, R * (0.35 + 0.65 * p) * 0.7, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.fillStyle = hexAlpha(TOWER_LIGHT.splash, (1 - p) * 0.5)
+      ctx.beginPath()
+      ctx.arc(x, y, R * 0.3 * (1 - p), 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = hexAlpha(TOWER_COLORS.splash, 1 - p)
+      const ringR = R * (0.35 + 0.65 * p)
+      for (let i = 0; i < 6; i++) {
+        const a = (i * Math.PI) / 3 + explosion.id
+        ctx.beginPath()
+        ctx.arc(x + ringR * Math.cos(a), y + ringR * Math.sin(a), 2, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    } else {
+      ctx.strokeStyle = `rgba(255, 255, 255, ${1 - p})`
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(x, y, 4 + 10 * p, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.fillStyle = '#FFD166'
+      ctx.globalAlpha = 1 - p
+      for (let i = 0; i < 4; i++) {
+        const a = Math.PI / 4 + (i * Math.PI) / 2 + explosion.id
+        const d = 4 + 12 * p
+        ctx.beginPath()
+        ctx.arc(x + d * Math.cos(a), y + d * Math.sin(a), 1.5, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      ctx.globalAlpha = (1 - p) * 0.4
+      ctx.drawImage(glowSprite(PALETTE.white), x - 13, y - 13, 26, 26)
+      ctx.globalAlpha = 1
+    }
+    ctx.restore()
+  }
+
+  const drawReticle = (ctx: CanvasRenderingContext2D, enemy: Enemy, accent: string) => {
+    const x = enemy.position.x * CELL_SIZE + CELL_SIZE / 2
+    const y = enemy.position.y * CELL_SIZE + CELL_SIZE / 2
+    const h = (ENEMY_RADIUS[enemy.enemy_type] ?? 10) + 5
+    ctx.strokeStyle = hexAlpha(accent, 0.8)
+    ctx.lineWidth = 1.25
+    ctx.beginPath()
+    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const cx = x + sx * h
+      const cy = y + sy * h
+      ctx.moveTo(cx - sx * 4, cy)
+      ctx.lineTo(cx, cy)
+      ctx.lineTo(cx, cy - sy * 4)
+    }
+    ctx.stroke()
+  }
+
+  // ——— input ———
+
+  const cellFromEvent = (e: React.MouseEvent<HTMLCanvasElement>): Position | null => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return null
     const rect = canvas.getBoundingClientRect()
     const x = Math.floor((e.clientX - rect.left) / CELL_SIZE)
     const y = Math.floor((e.clientY - rect.top) / CELL_SIZE)
-    if (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT) {
-      setHoveredCell({ x, y })
-    } else {
-      setHoveredCell(null)
-    }
+    return x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT ? { x, y } : null
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    setHoveredCell(cellFromEvent(e))
   }
 
   const handleMouseLeave = () => setHoveredCell(null)
 
-  const handleClick = () => {
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isGameOver) return
-    const hovered = hoveredCellRef.current
-    const gs = gameStateRef.current
+    // Use the click's own coordinates — the hover ref lags one render behind
+    // and a fast move+click would act on the previous cell.
+    const hovered = cellFromEvent(e)
+    const gs = liveStateRef.current
     const selType = selectedTowerTypeRef.current
     const currentTowers = gs?.towers || []
     const currentGold = gs?.gold ?? 0
@@ -521,7 +1377,14 @@ const GameCanvas = ({
       return
     }
 
-    if (isConnected && selType !== null && currentGold >= TOWER_COSTS[selType]) {
+    // Walls and the spawn/goal gates are not buildable (the server
+    // enforces this too).
+    const blocked =
+      (gs?.obstacles ?? []).some(o => o.x === hovered.x && o.y === hovered.y) ||
+      (gs?.spawn_point && gs.spawn_point.x === hovered.x && gs.spawn_point.y === hovered.y) ||
+      (gs?.goal_point && gs.goal_point.x === hovered.x && gs.goal_point.y === hovered.y)
+
+    if (isConnected && !blocked && selType !== null && currentGold >= TOWER_COSTS[selType]) {
       onPlaceTower(hovered.x, hovered.y, selType)
     }
   }
@@ -550,20 +1413,15 @@ const GameCanvas = ({
     if (isWaveActive) {
       const alive = gameState?.enemies.length ?? 0
       const remaining = gameState?.enemies_remaining ?? 0
-      return <span style={{ color: '#ff9800' }}>⚔️ Wave {gameState?.wave} in progress — {alive + remaining} enemies left</span>
+      return <span style={{ color: TOWER_COLORS.splash }}>WAVE {gameState?.wave} ACTIVE — {alive + remaining} HOSTILES LEFT</span>
     }
     if (countdown !== null) {
-      return <span style={{ color: '#2196F3' }}>⏱ Next wave in {countdown}s... <button onClick={handleStartWave} style={{ marginLeft: 8, padding: '2px 10px', fontSize: 12, cursor: 'pointer', background: '#4CAF50', border: 'none', borderRadius: 4, color: 'white' }}>Send Now</button></span>
+      return <span style={{ color: PALETTE.goal }}>NEXT WAVE IN {countdown}s… <button onClick={handleStartWave} className="btn btn-inline">SEND NOW ▸</button></span>
     }
-    return <span style={{ color: '#4CAF50' }}>✅ Wave {gameState?.wave} — ready to start</span>
+    return <span style={{ color: PALETTE.hpHigh }}>WAVE {gameState?.wave} — READY</span>
   }
 
-  const towerButtons: { type: TowerType, icon: string, label: string }[] = [
-    { type: 'basic', icon: '🗼', label: 'Basic' },
-    { type: 'sniper', icon: '🎯', label: 'Sniper' },
-    { type: 'splash', icon: '💥', label: 'Splash' },
-    { type: 'slow', icon: '❄️', label: 'Slow' },
-  ]
+  const towerButtons: TowerType[] = ['basic', 'sniper', 'splash', 'slow']
 
   const sellPrice = selectedTower
     ? Math.floor((selectedTower.total_spent ?? TOWER_COSTS[selectedTower.tower_type as TowerType]) * 0.7)
@@ -575,185 +1433,109 @@ const GameCanvas = ({
   return (
     <div className="game-canvas-container">
       {isGameOver && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.75)',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          zIndex: 10, borderRadius: '8px',
-        }}>
-          <div style={{ fontSize: '64px', marginBottom: '16px' }}>💀</div>
-          <h2 style={{ color: '#ff4444', fontSize: '36px', margin: '0 0 8px 0' }}>Game Over</h2>
-          <p style={{ color: '#ccc', fontSize: '18px', margin: '0 0 8px 0' }}>
-            You survived {(gameState?.wave ?? 1) - 1} wave{(gameState?.wave ?? 1) - 1 !== 1 ? 's' : ''}
-          </p>
-          <p style={{ color: '#FFD700', fontSize: '24px', fontWeight: 'bold', margin: '0 0 4px 0' }}>
-            ⭐ Score: {(gameState?.score ?? 0).toLocaleString()}
-          </p>
-          {isNewHighScore ? (
-            <p style={{ color: '#FFD700', fontSize: '18px', margin: '0 0 24px 0' }}>
-              🏆 New High Score!
+        <div className="game-over-overlay">
+          <div className="game-over-box panel">
+            <div className="game-over-title">SIGNAL LOST</div>
+            <p className="game-over-sub">
+              You survived {(gameState?.wave ?? 1) - 1} wave{(gameState?.wave ?? 1) - 1 !== 1 ? 's' : ''}
             </p>
-          ) : (
-            <p style={{ color: '#ccc', fontSize: '15px', margin: '0 0 24px 0' }}>
-              🏆 Best: {highScore.toLocaleString()}
-            </p>
-          )}
-          <button onClick={onNewGame} style={{
-            padding: '14px 32px', fontSize: '18px', fontWeight: 'bold',
-            background: '#4CAF50', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer',
-          }}>
-            🔄 Play Again
-          </button>
+            <p className="game-over-score">SCORE {(gameState?.score ?? 0).toLocaleString()}</p>
+            {isNewHighScore ? (
+              <p className="game-over-best new-best">★ NEW HIGH SCORE ★</p>
+            ) : (
+              <p className="game-over-best">BEST {highScore.toLocaleString()}</p>
+            )}
+            <button onClick={onNewGame} className="btn btn-primary btn-big">
+              REDEPLOY ▸
+            </button>
+          </div>
         </div>
       )}
 
-      <div className="game-info">
-        <div className="info-item">💰 Gold: <strong>${gold}</strong></div>
-        <div className="info-item">❤️ Health: <strong style={{ color: (gameState?.health ?? 100) <= 30 ? '#ff4444' : undefined }}>{gameState?.health ?? 100}</strong></div>
-        <div className="info-item">⭐ Score: <strong>{(gameState?.score ?? 0).toLocaleString()}</strong></div>
-        <div className="info-item">🏆 Best: <strong>{highScore.toLocaleString()}</strong></div>
-        <div className="info-item">🌊 Wave: <strong>{gameState?.wave ?? 1}</strong></div>
-        <div className="info-item">🔌 Server: <strong className={isConnected ? 'connected' : 'disconnected'}>{isConnected ? 'Connected' : 'Disconnected'}</strong></div>
+      <div className="game-info panel">
+        <div className="info-item"><span className="label">Gold</span><span className="value gold">${gold}</span></div>
+        <div className="info-item"><span className="label">Health</span><span className={`value ${(gameState?.health ?? 100) <= 30 ? 'health-low' : ''}`}>{gameState?.health ?? 100}</span></div>
+        <div className="info-item"><span className="label">Score</span><span className="value">{(gameState?.score ?? 0).toLocaleString()}</span></div>
+        <div className="info-item"><span className="label">Best</span><span className="value">{highScore.toLocaleString()}</span></div>
+        <div className="info-item"><span className="label">Wave</span><span className="value">{String(gameState?.wave ?? 1).padStart(2, '0')}</span></div>
+        <div className="info-item"><span className="label">Link</span><span className={`value ${isConnected ? 'connected' : 'disconnected'}`}>{isConnected ? 'ONLINE' : 'OFFLINE'}</span></div>
       </div>
 
-      <div style={{ textAlign: 'center', margin: '6px 0', fontSize: '14px', minHeight: '24px' }}>
+      <div className="wave-status">
         {waveStatusLabel()}
       </div>
 
       {!isGameOver && (gameState?.wave_preview?.length ?? 0) > 0 && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '16px',
-          fontSize: '13px',
-          background: 'rgba(255,255,255,0.06)',
-          padding: '6px 18px',
-          borderRadius: '6px',
-        }}>
-          <span style={{ color: '#888' }}>{isWaveActive ? '⚔️ This wave:' : '🌊 Next wave:'}</span>
+        <div className="wave-preview panel">
+          <span className="label">{isWaveActive ? 'THIS WAVE' : 'NEXT WAVE'}</span>
           {gameState!.wave_preview!.map(entry => (
-            <span key={entry.enemy_type} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-              <span style={{
-                width: '10px', height: '10px', borderRadius: '50%',
-                background: ENEMY_COLORS[entry.enemy_type] || '#ff4444',
-                display: 'inline-block',
-              }} />
-              {ENEMY_EMOJI[entry.enemy_type] || '👾'} <strong>×{entry.count}</strong>
+            <span key={entry.enemy_type} className="wave-preview-entry">
+              <EnemyGlyph type={entry.enemy_type} />
+              <strong>×{entry.count}</strong>
             </span>
           ))}
         </div>
       )}
 
       <div className="tower-selection">
-        {towerButtons.map(({ type, icon, label }) => {
+        {towerButtons.map(type => {
           const cost = TOWER_COSTS[type]
           const canAfford = gold >= cost
           return (
             <button
               key={type}
               className={`tower-btn ${selectedTowerType === type ? 'selected' : ''} ${!canAfford ? 'cannot-afford' : ''}`}
+              style={{ '--accent': TOWER_COLORS[type] } as React.CSSProperties}
               onClick={() => { setSelectedTowerType(type); setSelectedTower(null) }}
               disabled={isGameOver}
-              title={canAfford ? `Select ${label} tower` : `Not enough gold (need ${cost})`}
+              title={canAfford ? `Select ${TOWER_NAMES[type]} tower` : `Not enough gold (need ${cost})`}
             >
-              {icon} {label} Tower
-              <span className="cost" style={{ color: canAfford ? '#ffd700' : '#ff6666' }}>${cost}</span>
+              <TowerIcon type={type} />
+              <span>{TOWER_NAMES[type]}</span>
+              <span className="cost" style={{ color: canAfford ? PALETTE.gold : PALETTE.danger }}>${cost}</span>
             </button>
           )
         })}
         <button
-          className={`tower-btn ${selectedTowerType === null ? 'selected' : ''}`}
+          className={`tower-btn tower-btn-none ${selectedTowerType === null ? 'selected' : ''}`}
           onClick={() => { setSelectedTowerType(null); setSelectedTower(null) }}
           disabled={isGameOver}
           title="Deselect tower — cursor mode"
-          style={{ minWidth: '60px', opacity: 0.7 }}
         >
-          🚫 None
+          <span className="none-icon">∅</span>
+          <span>None</span>
         </button>
       </div>
 
       {selectedTower && (
-        <div style={{
-          margin: '6px auto',
-          padding: '10px 16px',
-          background: 'rgba(255,255,255,0.08)',
-          border: `2px solid ${TOWER_COLORS[selectedTower.tower_type] || '#4CAF50'}`,
-          borderRadius: '8px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '24px',
-          justifyContent: 'center',
-          fontSize: '13px',
-          maxWidth: '600px',
-        }}>
-          <div style={{ color: TOWER_COLORS[selectedTower.tower_type], fontWeight: 'bold', fontSize: '15px' }}>
-            {TOWER_LABELS[selectedTower.tower_type]} — Level {selectedTower.level ?? 1}{isMaxLevel ? ' ★ MAX' : ''}
+        <div className="selected-panel panel" style={{ '--accent': TOWER_COLORS[selectedTower.tower_type] } as React.CSSProperties}>
+          <div className="selected-name">
+            <TowerIcon type={selectedTower.tower_type as TowerType} size={24} />
+            <span>
+              {TOWER_NAMES[selectedTower.tower_type]} <span className="selected-level">MK{selectedTower.level ?? 1}{isMaxLevel ? ' ★MAX' : ''}</span>
+            </span>
           </div>
-          <div>🎯 Range: <strong>{selectedTower.range}</strong></div>
-          <div>⚔️ Damage: <strong>{selectedTower.damage}</strong></div>
-          <div>⚡ Fire Rate: <strong>{selectedTower.fire_rate}/s</strong></div>
-          <button
-            onClick={handleSellSelected}
-            style={{
-              padding: '6px 16px',
-              background: '#e53935',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontWeight: 'bold',
-              fontSize: '13px',
-            }}
-          >
-            💰 Sell ${sellPrice}
-          </button>
+          <div className="selected-stat"><span className="label">Range</span><span className="value">{selectedTower.range}</span></div>
+          <div className="selected-stat"><span className="label">Damage</span><span className="value">{selectedTower.damage}</span></div>
+          <div className="selected-stat"><span className="label">Rate</span><span className="value">{selectedTower.fire_rate}/s</span></div>
+          <button onClick={handleSellSelected} className="btn btn-danger">SELL ${sellPrice}</button>
           {isMaxLevel ? (
-            <span style={{
-              padding: '6px 16px',
-              background: '#333',
-              color: '#FFD700',
-              borderRadius: '6px',
-              fontSize: '13px',
-              fontWeight: 'bold',
-            }}>★ MAX</span>
+            <span className="max-badge">★ MAX</span>
           ) : (
             <button
               onClick={handleUpgradeSelected}
               disabled={!canAffordUpgrade}
-              title={canAffordUpgrade ? `Upgrade to level ${(selectedTower.level ?? 1) + 1}` : `Need $${upgradeCost} to upgrade`}
-              style={{
-                padding: '6px 16px',
-                background: canAffordUpgrade ? '#FFD700' : '#555',
-                color: canAffordUpgrade ? '#333' : '#888',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: canAffordUpgrade ? 'pointer' : 'not-allowed',
-                fontWeight: 'bold',
-                fontSize: '13px',
-              }}
+              className="btn btn-gold"
+              title={canAffordUpgrade ? `Upgrade to MK${(selectedTower.level ?? 1) + 1}` : `Need $${upgradeCost} to upgrade`}
             >
-              ⬆ Upgrade ${upgradeCost}
+              UPGRADE ${upgradeCost}
             </button>
           )}
-          <button
-            onClick={() => setSelectedTower(null)}
-            style={{
-              padding: '6px 10px',
-              background: '#555',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontSize: '13px',
-            }}
-          >
-            ✕
-          </button>
+          <button onClick={() => setSelectedTower(null)} className="btn btn-close">✕</button>
         </div>
       )}
 
-      <div style={{ position: 'relative' }}>
+      <div className="canvas-frame">
         <canvas
           ref={canvasRef}
           width={GRID_WIDTH * CELL_SIZE}
@@ -772,10 +1554,10 @@ const GameCanvas = ({
           disabled={!isConnected || isWaveActive || isGameOver || countdown !== null}
           title={isWaveActive ? 'Wave already in progress' : 'Start the next wave'}
         >
-          {isWaveActive ? '⚔️ Wave Active...' : '▶️ Start Wave'}
+          {isWaveActive ? 'WAVE ACTIVE…' : 'START WAVE ▸'}
         </button>
         <button
-          className="btn"
+          className={`btn ${autoWave ? 'btn-toggled' : ''}`}
           onClick={() => {
             setAutoWave(prev => {
               if (prev) {
@@ -786,102 +1568,77 @@ const GameCanvas = ({
             })
           }}
           disabled={isGameOver}
-          style={{
-            background: autoWave ? '#1565C0' : '#555',
-            color: 'white',
-            border: autoWave ? '2px solid #42A5F5' : '2px solid transparent',
-          }}
           title="Automatically start next wave after 5 seconds"
         >
-          {autoWave ? '⏱ Auto: ON' : '⏱ Auto: OFF'}
+          AUTO: {autoWave ? 'ON' : 'OFF'}
+        </button>
+        <button className="btn" onClick={onNewGame} disabled={!isConnected}>
+          NEW GAME
         </button>
         <button
-          className="btn btn-success"
-          onClick={onNewGame}
-          disabled={!isConnected}
-        >
-          🔄 New Game
-        </button>
-        <button
-          className="btn"
+          className={`btn ${showGlossary ? 'btn-toggled' : ''}`}
           onClick={() => setShowGlossary(prev => !prev)}
-          style={{
-            background: showGlossary ? '#7B1FA2' : '#555',
-            color: 'white',
-            border: showGlossary ? '2px solid #BA68C8' : '2px solid transparent',
-          }}
           title="Enemy types, stats, and rewards"
         >
-          📖 Glossary
+          GLOSSARY
         </button>
         {showDebug && (
-          <button className="btn" style={{ background: '#555' }} onClick={onSpawnEnemy} disabled={!isConnected}>
-            🦀 Spawn Test
+          <button className="btn" onClick={onSpawnEnemy} disabled={!isConnected}>
+            SPAWN TEST
           </button>
         )}
       </div>
 
       {showGlossary && (
-        <div style={{
-          background: '#2a2a2a',
-          padding: '14px 24px',
-          borderRadius: '8px',
-          maxWidth: '640px',
-        }}>
-          <div style={{ fontWeight: 'bold', fontSize: '15px', marginBottom: '10px', textAlign: 'center' }}>
-            📖 Enemy Glossary
-          </div>
-          <table style={{ borderCollapse: 'collapse', fontSize: '13px', width: '100%' }}>
+        <div className="glossary panel">
+          <div className="glossary-title">HOSTILE REGISTRY</div>
+          <table>
             <thead>
-              <tr style={{ color: '#888', textAlign: 'left' }}>
-                <th style={{ padding: '4px 14px 4px 0' }}>Enemy</th>
-                <th style={{ padding: '4px 14px 4px 0' }}>❤️ HP</th>
-                <th style={{ padding: '4px 14px 4px 0' }}>👟 Speed</th>
-                <th style={{ padding: '4px 14px 4px 0' }}>💰 Gold</th>
-                <th style={{ padding: '4px 14px 4px 0' }}>⭐ Score</th>
-                <th style={{ padding: '4px 0' }}>Appears</th>
+              <tr>
+                <th>Unit</th>
+                <th>HP</th>
+                <th>Speed</th>
+                <th>Gold</th>
+                <th>Score</th>
+                <th>Appears</th>
               </tr>
             </thead>
             <tbody>
               {ENEMY_GLOSSARY.map(enemy => (
-                <tr key={enemy.type} style={{ borderTop: '1px solid #3a3a3a' }}>
-                  <td style={{ padding: '6px 14px 6px 0' }}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
-                      <span style={{
-                        width: '12px', height: '12px', borderRadius: '50%',
-                        background: ENEMY_COLORS[enemy.type],
-                        display: 'inline-block',
-                      }} />
-                      {ENEMY_EMOJI[enemy.type]} <strong>{enemy.name}</strong>
+                <tr key={enemy.type}>
+                  <td>
+                    <span className="glossary-unit">
+                      <EnemyGlyph type={enemy.type} size={18} />
+                      <strong>{enemy.name}</strong>
                     </span>
                   </td>
-                  <td style={{ padding: '6px 14px 6px 0' }}>{enemy.health}</td>
-                  <td style={{ padding: '6px 14px 6px 0' }}>{enemy.speed}</td>
-                  <td style={{ padding: '6px 14px 6px 0', color: '#ffd700' }}>+{enemy.gold}</td>
-                  <td style={{ padding: '6px 14px 6px 0', color: '#ffd700' }}>{enemy.score}×wave</td>
-                  <td style={{ padding: '6px 0' }}>{enemy.appears}</td>
+                  <td>{enemy.health}</td>
+                  <td>{enemy.speed}</td>
+                  <td className="gold-text">+{enemy.gold}</td>
+                  <td className="gold-text">{enemy.score}×wave</td>
+                  <td>{enemy.appears}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <div style={{ color: '#888', fontSize: '12px', marginTop: '8px', fontStyle: 'italic' }}>
-            HP and speed scale up with wave number past wave 5. A boss appears every wave from 11 — another joins every 3rd wave (max 6).
+          <div className="glossary-note">
+            HP and speed scale up past wave 5. A boss appears every wave from 11 — another joins every 3rd wave (max 6).
           </div>
         </div>
       )}
 
-      <div className="info-box">
+      <div className="info-box panel">
         <p>
-          <strong>Towers:</strong> {gameState?.towers.length ?? 0} |
-          <strong> Enemies:</strong> {gameState?.enemies.length ?? 0} |
-          <strong> Projectiles:</strong> {gameState?.projectiles.length ?? 0}
+          <span className="label">Towers</span> {gameState?.towers.length ?? 0}
+          <span className="label sep">Hostiles</span> {gameState?.enemies.length ?? 0}
+          <span className="label sep">Shots</span> {gameState?.projectiles.length ?? 0}
         </p>
         <p className="hint">
           {selectedTower
-            ? '👆 Click elsewhere to deselect tower'
+            ? 'Click elsewhere to deselect tower'
             : selectedTowerType === null
-            ? '🖱️ Cursor mode — click a tower to select it'
-            : '💡 Click a tower to select and upgrade/sell it, or click the grid to place'}
+            ? 'Cursor mode — click a tower to select it'
+            : 'Click a tower to select and upgrade/sell it, or click the grid to place'}
         </p>
       </div>
     </div>

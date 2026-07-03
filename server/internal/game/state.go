@@ -1,7 +1,7 @@
 package game
 
 import (
-	"fmt"
+	"errors"
 	"math"
 	"sync"
 )
@@ -91,7 +91,7 @@ func GetWaveConfig(wave int) WaveConfig {
 // ScaledEnemyStats returns health and speed for an enemy type scaled to the current wave.
 // Base stats are unchanged so the info panel still shows correct base values.
 //
-// Health: +15% compound per wave above 1.
+// Health: +10% compound per wave above 5.
 // Speed:  +3% compound per wave above 5, capped at +80% of base.
 func ScaledEnemyStats(enemyType string, wave int) (health float64, speed float64) {
 	base := getEnemyStats(enemyType)
@@ -148,8 +148,11 @@ type Enemy struct {
 	Speed         float64    `json:"speed"`
 	SlowDuration  float64    `json:"slow_duration"`
 	SlowMultiplier float64   `json:"slow_multiplier"`
-	Path          []Position `json:"path,omitempty"`
-	PathIndex     int        `json:"path_index"`
+	// Path and PathIndex are server-internal: nothing in the client reads
+	// them, and serializing every enemy's full waypoint list was ~27% of the
+	// 60 Hz snapshot payload.
+	Path      []Position `json:"-"`
+	PathIndex int        `json:"-"`
 	// SpawnWave is the wave this enemy spawned in — used for kill scoring so
 	// debug-spawned enemies (wave-1 stats) don't score at the current wave.
 	SpawnWave int `json:"-"`
@@ -209,6 +212,9 @@ type GameStateWithShooting struct {
 	SpeedMultiplier  float64       `json:"speed_multiplier"`
 	SpawnPoint       *Position     `json:"spawn_point,omitempty"`
 	GoalPoint        *Position     `json:"goal_point,omitempty"`
+	// Obstacles is the static map layout (permanent walls). Shared package
+	// slice — never mutated after init.
+	Obstacles []Position `json:"obstacles,omitempty"`
 	// WavePreview describes the composition of wave `Wave` — the upcoming wave
 	// during the waiting phase, the in-flight wave during the active phase.
 	// Only populated on snapshots.
@@ -343,13 +349,14 @@ func (gs *GameStateWithShooting) updateTowers(deltaTime float64) {
 
 func (gs *GameStateWithShooting) findNearestEnemy(pos Position, maxRange float64) *Enemy {
 	var nearest *Enemy
-	minDist := math.MaxFloat64
+	minDistSq := math.MaxFloat64
+	maxRangeSq := maxRange * maxRange
 
 	for i := range gs.Enemies {
 		enemy := &gs.Enemies[i]
-		dist := distance(pos, enemy.Position)
-		if dist <= maxRange && dist < minDist {
-			minDist = dist
+		distSq := distanceSquared(pos, enemy.Position)
+		if distSq <= maxRangeSq && distSq < minDistSq {
+			minDistSq = distSq
 			nearest = enemy
 		}
 	}
@@ -377,12 +384,12 @@ func (gs *GameStateWithShooting) shootProjectile(tower *Tower, target *Enemy) {
 		if tower.AOERadius > 0 {
 			proj.AOERadius = tower.AOERadius
 		} else {
-			proj.AOERadius = 1.5
+			proj.AOERadius = defaultAOERadius
 		}
 		if tower.AOEDamage > 0 {
 			proj.AOEDamage = tower.Damage * tower.AOEDamage
 		} else {
-			proj.AOEDamage = tower.Damage * 0.60
+			proj.AOEDamage = tower.Damage * defaultAOEDamagePct
 		}
 	}
 
@@ -391,7 +398,9 @@ func (gs *GameStateWithShooting) shootProjectile(tower *Tower, target *Enemy) {
 }
 
 func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
-	active := make([]Projectile, 0)
+	// Filter in place: the write index never passes the read index, and
+	// GetSnapshot deep-copies under the lock, so nothing aliases the tail.
+	active := gs.Projectiles[:0]
 
 	for i := range gs.Projectiles {
 		proj := &gs.Projectiles[i]
@@ -413,45 +422,39 @@ func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
 		dist := math.Sqrt(dx*dx + dy*dy)
 
 		if dist < 0.3 {
-			// Look up which tower fired this projectile to decide effect
-			var firingTowerType string
-			for _, t := range gs.Towers {
-				if t.ID == proj.TowerID {
-					firingTowerType = t.TowerType
+			target.Health -= proj.Damage
+
+			// Slow towers debuff on hit — read the parameters from the firing
+			// tower itself so upgrades take effect (one lookup, not two).
+			var firingTower *Tower
+			for j := range gs.Towers {
+				if gs.Towers[j].ID == proj.TowerID {
+					firingTower = &gs.Towers[j]
 					break
 				}
 			}
-
-			if firingTowerType == "slow" {
-				// Read slow parameters from the tower itself so upgrades take effect
-				slowDuration := 2.0
-				slowMultiplier := 0.40
-				for _, t := range gs.Towers {
-					if t.ID == proj.TowerID {
-						if t.SlowDuration > 0 {
-							slowDuration = t.SlowDuration
-						}
-						if t.SlowMultiplier > 0 {
-							slowMultiplier = t.SlowMultiplier
-						}
-						break
-					}
+			if firingTower != nil && firingTower.TowerType == "slow" {
+				slowDuration := defaultSlowDuration
+				slowMultiplier := defaultSlowMultiplier
+				if firingTower.SlowDuration > 0 {
+					slowDuration = firingTower.SlowDuration
+				}
+				if firingTower.SlowMultiplier > 0 {
+					slowMultiplier = firingTower.SlowMultiplier
 				}
 				target.SlowDuration = slowDuration
 				target.SlowMultiplier = slowMultiplier
-				target.Health -= proj.Damage
-			} else {
-				target.Health -= proj.Damage
 			}
 
 			// AOE splash: damage all enemies within radius, skipping the primary target
 			if proj.IsAOE {
+				aoeRadiusSq := proj.AOERadius * proj.AOERadius
 				for j := range gs.Enemies {
 					splashTarget := &gs.Enemies[j]
 					if splashTarget.ID == proj.TargetID {
 						continue // already took direct hit damage
 					}
-					if distance(proj.Position, splashTarget.Position) <= proj.AOERadius {
+					if distanceSquared(proj.Position, splashTarget.Position) <= aoeRadiusSq {
 						splashTarget.Health -= proj.AOEDamage
 					}
 				}
@@ -491,7 +494,7 @@ func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
 }
 
 func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
-	alive := make([]Enemy, 0)
+	alive := gs.Enemies[:0] // in-place filter, same pattern as updateProjectiles
 
 	for i := range gs.Enemies {
 		enemy := &gs.Enemies[i]
@@ -543,6 +546,11 @@ func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
 
 		if enemy.PathIndex < len(enemy.Path) {
 			alive = append(alive, *enemy)
+		} else if gs.GoalPoint != nil && distance(enemy.Position, *gs.GoalPoint) >= 0.5 {
+			// Finished its path but nowhere near the goal: the enemy is trapped
+			// (path recalculation found no route and parked it in place). It
+			// stays on the field, idle, until a tower change re-paths it.
+			alive = append(alive, *enemy)
 		} else {
 			gs.Health -= 10
 		}
@@ -552,7 +560,7 @@ func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
 }
 
 func (gs *GameStateWithShooting) updateEffects(deltaTime float64) {
-	activeFlashes := make([]MuzzleFlash, 0)
+	activeFlashes := gs.MuzzleFlashes[:0]
 	for i := range gs.MuzzleFlashes {
 		flash := &gs.MuzzleFlashes[i]
 		flash.Duration -= deltaTime
@@ -562,7 +570,7 @@ func (gs *GameStateWithShooting) updateEffects(deltaTime float64) {
 	}
 	gs.MuzzleFlashes = activeFlashes
 
-	activeExplosions := make([]Explosion, 0)
+	activeExplosions := gs.Explosions[:0]
 	for i := range gs.Explosions {
 		explosion := &gs.Explosions[i]
 		explosion.Duration -= deltaTime
@@ -573,21 +581,51 @@ func (gs *GameStateWithShooting) updateEffects(deltaTime float64) {
 	gs.Explosions = activeExplosions
 }
 
-// AddTower adds a tower, deducting gold. Returns false if insufficient funds.
-func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) (Tower, bool) {
+// Placement failure reasons, distinguished so the client ack can say why.
+var (
+	ErrInsufficientGold = errors.New("insufficient gold")
+	ErrInvalidPlacement = errors.New("invalid placement")
+)
+
+// AddTower validates the placement (grid bounds, free cell, not a wall, not
+// the spawn/goal, known type), deducts gold, and adds the tower. The client
+// prevents invalid clicks too, but the server no longer trusts it to.
+func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) (Tower, error) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+
+	cx, cy := int(math.Round(x)), int(math.Round(y))
+	if cx < 0 || cx >= gridWidth || cy < 0 || cy >= gridHeight {
+		return Tower{}, ErrInvalidPlacement
+	}
+	if isObstacle(cx, cy) {
+		return Tower{}, ErrInvalidPlacement
+	}
+	if gs.SpawnPoint != nil && cx == int(gs.SpawnPoint.X) && cy == int(gs.SpawnPoint.Y) {
+		return Tower{}, ErrInvalidPlacement
+	}
+	if gs.GoalPoint != nil && cx == int(gs.GoalPoint.X) && cy == int(gs.GoalPoint.Y) {
+		return Tower{}, ErrInvalidPlacement
+	}
+	for _, t := range gs.Towers {
+		if int(math.Round(t.Position.X)) == cx && int(math.Round(t.Position.Y)) == cy {
+			return Tower{}, ErrInvalidPlacement
+		}
+	}
+	if _, known := towerStatsByType[towerType]; !known {
+		return Tower{}, ErrInvalidPlacement
+	}
 
 	stats := getTowerStats(towerType)
 	cost := getTowerCost(towerType)
 
 	if gs.Gold < cost {
-		return Tower{}, false
+		return Tower{}, ErrInsufficientGold
 	}
 
 	tower := Tower{
 		ID:         gs.nextTowerID,
-		Position:   Position{X: x, Y: y},
+		Position:   Position{X: float64(cx), Y: float64(cy)}, // snapped to the cell
 		TowerType:  towerType,
 		Level:      1,
 		Range:      stats.Range,
@@ -600,12 +638,12 @@ func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) (Tower
 
 	// Initialize special fields for slow and splash towers
 	if towerType == "slow" {
-		tower.SlowDuration = 2.0
-		tower.SlowMultiplier = 0.40
+		tower.SlowDuration = defaultSlowDuration
+		tower.SlowMultiplier = defaultSlowMultiplier
 	}
 	if towerType == "splash" {
-		tower.AOERadius = 1.5
-		tower.AOEDamage = 0.60
+		tower.AOERadius = defaultAOERadius
+		tower.AOEDamage = defaultAOEDamagePct
 	}
 
 	gs.Gold -= cost
@@ -613,7 +651,7 @@ func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) (Tower
 	gs.nextTowerID++
 	gs.RecalculateEnemyPaths()
 
-	return tower, true
+	return tower, nil
 }
 
 // RemoveTower removes a tower by ID and refunds 70% of its cost.
@@ -676,15 +714,15 @@ func (gs *GameStateWithShooting) UpgradeTower(towerID int) (Tower, bool) {
 		// Slow tower: longer duration and stronger slow each level
 		// L1: 2.0s / 0.40x  L2: 2.5s / 0.35x  L3: 3.0s / 0.30x  L4: 3.5s / 0.25x
 		if tower.TowerType == "slow" {
-			tower.SlowDuration = 2.0 + float64(tower.Level-1)*0.5
-			tower.SlowMultiplier = 0.40 - float64(tower.Level-1)*0.05
+			tower.SlowDuration = defaultSlowDuration + float64(tower.Level-1)*0.5
+			tower.SlowMultiplier = defaultSlowMultiplier - float64(tower.Level-1)*0.05
 		}
 
 		// Splash tower: wider radius and higher AOE damage % each level
 		// L1: 1.5 / 60%  L2: 1.8 / 70%  L3: 2.1 / 80%  L4: 2.4 / 90%
 		if tower.TowerType == "splash" {
-			tower.AOERadius = 1.5 + float64(tower.Level-1)*0.3
-			tower.AOEDamage = 0.60 + float64(tower.Level-1)*0.10
+			tower.AOERadius = defaultAOERadius + float64(tower.Level-1)*0.3
+			tower.AOEDamage = defaultAOEDamagePct + float64(tower.Level-1)*0.10
 		}
 
 		return *tower, true
@@ -723,11 +761,18 @@ func (gs *GameStateWithShooting) DecrementEnemiesRemaining() {
 	}
 }
 
-func (gs *GameStateWithShooting) StartWave(totalEnemies int) {
+// StartWave transitions waiting → active and sets the spawn counter. Returns
+// false when the game is not in the waiting phase, so a second concurrent
+// start_wave request cannot double-spawn a wave.
+func (gs *GameStateWithShooting) StartWave(totalEnemies int) bool {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+	if gs.Phase != PhaseWaiting {
+		return false
+	}
 	gs.Phase = PhaseActive
 	gs.EnemiesRemaining = totalEnemies
+	return true
 }
 
 // GetSpawnCancel returns the cancel channel for the current spawn goroutine
@@ -763,18 +808,13 @@ func (gs *GameStateWithShooting) IsFastForward() bool {
 	return gs.FastForward
 }
 
-func (gs *GameStateWithShooting) RemoveAllTowers() {
+// SetSpawnGoal sets the spawn and goal cells under the game lock — the game
+// loop and snapshot reads run concurrently as soon as the room exists.
+func (gs *GameStateWithShooting) SetSpawnGoal(spawn, goal Position) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-	gs.Towers = make([]Tower, 0)
-	gs.Projectiles = make([]Projectile, 0)
-}
-
-func (gs *GameStateWithShooting) RemoveAllEnemies() {
-	gs.mu.Lock()
-	defer gs.mu.Unlock()
-	gs.Enemies = make([]Enemy, 0)
-	gs.Projectiles = make([]Projectile, 0)
+	gs.SpawnPoint = &spawn
+	gs.GoalPoint = &goal
 }
 
 func (gs *GameStateWithShooting) GetSnapshot() *GameStateWithShooting {
@@ -796,8 +836,11 @@ func (gs *GameStateWithShooting) GetSnapshot() *GameStateWithShooting {
 		Phase:            gs.Phase,
 		EnemiesRemaining: gs.EnemiesRemaining,
 		GameTime:         gs.GameTime,
+		FastForward:      gs.FastForward,
+		SpeedMultiplier:  gs.SpeedMultiplier,
 		SpawnPoint:       gs.SpawnPoint,
 		GoalPoint:        gs.GoalPoint,
+		Obstacles:        mapObstacles,
 		WavePreview:      buildWavePreview(gs.Wave),
 	}
 
@@ -825,33 +868,55 @@ func (gs *GameStateWithShooting) GetSpawnGoal() (*Position, *Position) {
 
 // Helper types and functions
 
+// Slow and splash tower defaults — the single source for AddTower
+// initialization, the projectile-hit fallbacks, and the upgrade formulas.
+const (
+	defaultSlowDuration   = 2.0
+	defaultSlowMultiplier = 0.40
+	defaultAOERadius      = 1.5
+	defaultAOEDamagePct   = 0.60
+)
+
 type towerStats struct {
 	Range    float64
 	Damage   float64
 	FireRate float64
 }
 
-func getTowerStats(towerType string) towerStats {
-	stats := map[string]towerStats{
+// Stat tables are package-level so lookups don't rebuild a map per call.
+// Values are mirrored in the client UI (client/src/types/game.ts TOWER_COSTS,
+// GameCanvas.tsx TOWER_RANGES and ENEMY_GLOSSARY) — keep them in sync.
+var (
+	towerStatsByType = map[string]towerStats{
 		"basic":  {Range: 3.0, Damage: 15.0, FireRate: 1.0},
 		"sniper": {Range: 6.0, Damage: 50.0, FireRate: 0.5},
 		"splash": {Range: 2.5, Damage: 10.0, FireRate: 1.5},
 		"slow":   {Range: 3.5, Damage: 8.0, FireRate: 0.8},
 	}
-	if s, ok := stats[towerType]; ok {
-		return s
-	}
-	return stats["basic"]
-}
-
-func getTowerCost(towerType string) int {
-	costs := map[string]int{
+	towerCostByType = map[string]int{
 		"basic":  50,
 		"sniper": 100,
 		"splash": 75,
 		"slow":   60,
 	}
-	if c, ok := costs[towerType]; ok {
+	enemyStatsByType = map[string]enemyStats{
+		"basic":  {Health: 100.0, Speed: 2.0},
+		"fast":   {Health: 50.0, Speed: 4.0},
+		"tank":   {Health: 300.0, Speed: 1.0},
+		"flying": {Health: 80.0, Speed: 3.0}, // defined but never spawned by any wave
+		"boss":   {Health: 1000.0, Speed: 0.5},
+	}
+)
+
+func getTowerStats(towerType string) towerStats {
+	if s, ok := towerStatsByType[towerType]; ok {
+		return s
+	}
+	return towerStatsByType["basic"]
+}
+
+func getTowerCost(towerType string) int {
+	if c, ok := towerCostByType[towerType]; ok {
 		return c
 	}
 	return 50
@@ -863,17 +928,10 @@ type enemyStats struct {
 }
 
 func getEnemyStats(enemyType string) enemyStats {
-	stats := map[string]enemyStats{
-		"basic":  {Health: 100.0, Speed: 2.0},
-		"fast":   {Health: 50.0, Speed: 4.0},
-		"tank":   {Health: 300.0, Speed: 1.0},
-		"flying": {Health: 80.0, Speed: 3.0},
-		"boss":   {Health: 1000.0, Speed: 0.5},
-	}
-	if s, ok := stats[enemyType]; ok {
+	if s, ok := enemyStatsByType[enemyType]; ok {
 		return s
 	}
-	return stats["basic"]
+	return enemyStatsByType["basic"]
 }
 
 // buildWavePreview flattens the wave config into {enemy_type, count} entries for the client
@@ -886,105 +944,132 @@ func buildWavePreview(wave int) []WavePreviewEntry {
 	return preview
 }
 
-// getEnemyScorePoints returns base score points per kill. Multiplied by the
-// wave number when awarded. Values differ from gold rewards on purpose:
-// score rewards difficulty (fast enemies are hard to hit), gold rewards farming.
-func getEnemyScorePoints(enemyType string) int {
-	points := map[string]int{
+// Score points per kill (multiplied by the enemy's spawn wave when awarded)
+// and gold rewards. Values differ on purpose: score rewards difficulty (fast
+// enemies are hard to hit), gold rewards farming.
+var (
+	enemyScoreByType = map[string]int{
 		"basic":  10,
 		"fast":   15,
 		"tank":   30,
 		"flying": 20,
 		"boss":   100,
 	}
-	if p, ok := points[enemyType]; ok {
-		return p
-	}
-	return 10
-}
-
-func getEnemyGoldReward(enemyType string) int {
-	rewards := map[string]int{
+	enemyGoldByType = map[string]int{
 		"basic":  10,
 		"fast":   8,
 		"tank":   25,
 		"flying": 15,
 		"boss":   100,
 	}
-	if r, ok := rewards[enemyType]; ok {
+)
+
+func getEnemyScorePoints(enemyType string) int {
+	if p, ok := enemyScoreByType[enemyType]; ok {
+		return p
+	}
+	return 10
+}
+
+func getEnemyGoldReward(enemyType string) int {
+	if r, ok := enemyGoldByType[enemyType]; ok {
 		return r
 	}
 	return 10
 }
 
 func distance(a, b Position) float64 {
-	dx := a.X - b.X
-	dy := a.Y - b.Y
-	return math.Sqrt(dx*dx + dy*dy)
+	return math.Sqrt(distanceSquared(a, b))
 }
 
-func (gs *GameStateWithShooting) findPath(start, goal Position) []Position {
-	const gridWidth = 20
-	const gridHeight = 15
+// distanceSquared avoids the sqrt for pure range/nearest comparisons.
+func distanceSquared(a, b Position) float64 {
+	dx := a.X - b.X
+	dy := a.Y - b.Y
+	return dx*dx + dy*dy
+}
 
-	blocked := make(map[string]bool)
+const (
+	gridWidth  = 20
+	gridHeight = 15
+)
+
+// findPath runs a BFS over the grid with towers as blockers. Cells are flat
+// integer indices with parent-pointer path reconstruction — the previous
+// version built fmt.Sprintf map keys and copied the whole accumulated path
+// per enqueued node (~1,500 allocations per search), which made mid-wave
+// tower placement (one search per living enemy, under the game lock) stall
+// the 60 FPS loop. Expansion order (+x, -x, +y, -y) is unchanged, so the
+// returned paths are identical to the old implementation's.
+func (gs *GameStateWithShooting) findPath(start, goal Position) []Position {
+	sx, sy := int(math.Round(start.X)), int(math.Round(start.Y))
+	gx, gy := int(math.Round(goal.X)), int(math.Round(goal.Y))
+	if sx < 0 || sx >= gridWidth || sy < 0 || sy >= gridHeight ||
+		gx < 0 || gx >= gridWidth || gy < 0 || gy >= gridHeight {
+		return nil
+	}
+	if sx == gx && sy == gy {
+		return []Position{start}
+	}
+
+	blocked := obstacleSet // copy: map walls block exactly like towers
 	for _, tower := range gs.Towers {
 		tx := int(math.Round(tower.Position.X))
 		ty := int(math.Round(tower.Position.Y))
-		blocked[fmt.Sprintf("%d,%d", tx, ty)] = true
+		if tx >= 0 && tx < gridWidth && ty >= 0 && ty < gridHeight {
+			blocked[ty*gridWidth+tx] = true
+		}
 	}
 
-	type queueItem struct {
-		pos  Position
-		path []Position
-	}
+	startIdx := sy*gridWidth + sx
+	goalIdx := gy*gridWidth + gx
 
-	startKey := fmt.Sprintf("%d,%d", int(math.Round(start.X)), int(math.Round(start.Y)))
-	goalKey := fmt.Sprintf("%d,%d", int(math.Round(goal.X)), int(math.Round(goal.Y)))
+	var visited [gridWidth * gridHeight]bool
+	var parent [gridWidth * gridHeight]int
+	visited[startIdx] = true
+	queue := make([]int, 1, gridWidth*gridHeight)
+	queue[0] = startIdx
 
-	queue := []queueItem{{pos: start, path: []Position{start}}}
-	visited := make(map[string]bool)
-	visited[startKey] = true
+	found := false
+	for head := 0; head < len(queue) && !found; head++ {
+		cur := queue[head]
+		cx, cy := cur%gridWidth, cur/gridWidth
 
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-
-		px := int(math.Round(current.pos.X))
-		py := int(math.Round(current.pos.Y))
-
-		if fmt.Sprintf("%d,%d", px, py) == goalKey {
-			return current.path
-		}
-
-		neighbors := []Position{
-			{X: float64(px + 1), Y: float64(py)},
-			{X: float64(px - 1), Y: float64(py)},
-			{X: float64(px), Y: float64(py + 1)},
-			{X: float64(px), Y: float64(py - 1)},
-		}
-
-		for _, next := range neighbors {
-			nx := int(math.Round(next.X))
-			ny := int(math.Round(next.Y))
-			key := fmt.Sprintf("%d,%d", nx, ny)
-
+		neighbors := [4][2]int{{cx + 1, cy}, {cx - 1, cy}, {cx, cy + 1}, {cx, cy - 1}}
+		for _, n := range neighbors {
+			nx, ny := n[0], n[1]
 			if nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight {
 				continue
 			}
-			if blocked[key] || visited[key] {
+			ni := ny*gridWidth + nx
+			if blocked[ni] || visited[ni] {
 				continue
 			}
-
-			visited[key] = true
-			newPath := make([]Position, len(current.path))
-			copy(newPath, current.path)
-			newPath = append(newPath, next)
-			queue = append(queue, queueItem{pos: next, path: newPath})
+			visited[ni] = true
+			parent[ni] = cur
+			if ni == goalIdx {
+				found = true
+				break
+			}
+			queue = append(queue, ni)
 		}
 	}
+	if !found {
+		return nil
+	}
 
-	return nil
+	// Walk parents goal→start, then reverse. path[0] keeps the caller's
+	// original (unrounded) start position, matching the old behavior.
+	rev := []int{goalIdx}
+	for cur := parent[goalIdx]; cur != startIdx; cur = parent[cur] {
+		rev = append(rev, cur)
+	}
+	path := make([]Position, 0, len(rev)+1)
+	path = append(path, start)
+	for i := len(rev) - 1; i >= 0; i-- {
+		path = append(path, Position{X: float64(rev[i] % gridWidth), Y: float64(rev[i] / gridWidth)})
+	}
+	return path
 }
 
 func (gs *GameStateWithShooting) RecalculateEnemyPaths() {

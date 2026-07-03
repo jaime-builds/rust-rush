@@ -6,10 +6,10 @@
 - [x] Initialize project structure
 - [x] Set up Go WebSocket server
 - [x] Create React + TypeScript frontend
-- [x] Configure PostgreSQL database
+- [x] ~~Configure PostgreSQL database~~ (legacy — schema exists in `database/` but nothing connects to it; state is in-memory. Revisit in Phase 23.)
 - [x] Create development environment docs
 
-### Phase 2: A* Pathfinding
+### Phase 2: Pathfinding (BFS — the A* implementation only ever lived in the legacy Rust prototype)
 - [x] Implement BFS pathfinding in Go
 - [x] Path reconstruction
 - [x] Integration with Enemy struct
@@ -179,13 +179,13 @@
 - [ ] UI click sounds
 - [ ] Mute/volume controls
 
-### Phase 19: Visual Polish
+### Phase 19: Visual Polish (largely done July 3 — "NEON IRONLINE" overhaul)
 - [ ] Tower placement animations
-- [ ] Particle effects for hits
-- [ ] Enemy spawn animation
+- [x] Particle effects for hits (spark bursts + additive shockwave rings)
+- [ ] Enemy spawn animation (spawn gate has marching chevrons; per-unit animation still open)
 - [ ] Screen shake on damage
-- [ ] Background theme (grass, path)
-- [ ] Enemy type visual improvements
+- [x] Background theme (dark tech board: gradient, grid, bulkheads, vignette, animated portals)
+- [x] Enemy type visual improvements (distinct heading-rotated silhouettes per type)
 
 ### Phase 20: UI Improvements
 - [ ] Mini-map
@@ -228,7 +228,7 @@
 - [x] ~~Enemies going through towers~~ (Fixed - server-side pathfinding)
 - [x] ~~Tower placement restarting enemy position~~ (Fixed - state sync)
 - [x] ~~Enemy backtracking on path recalculation~~ (Fixed - waypoint detection)
-- [x] ~~Clear button not clearing enemies~~ (Fixed - clear_all message)
+- [x] ~~Clear button not clearing enemies~~ (Fixed - clear_all message; both button and message were later removed in Phase 13)
 - [x] ~~Towers not rotating~~ (Fixed - server calculates rotation)
 - [x] ~~Dead enemies not disappearing~~ (Fixed - server removes on death)
 - [x] ~~Only first tower shooting~~ (Fixed - all towers update)
@@ -239,18 +239,26 @@
 - [x] ~~Wave carries over after New Game~~ (Fixed - cancel channel)
 - [x] ~~New Game required two clicks~~ (Fixed - client resets immediately)
 - [x] ~~Stale enemy rendering after wave clear~~ (Fixed - canvas ref pattern)
+- [x] ~~Trapped enemies leaked -10 health and vanished~~ (Fixed July 2 — they now stop and wait, resume when a path reopens; regression-tested)
+- [x] ~~Wave started against a fully blocked path soft-locked the game~~ (Fixed July 2 — blocked spawns are skipped so the wave completes; regression-tested)
+- [x] ~~Hub broadcast raced the clients map (potential server crash) and could double-close a client channel~~ (Fixed July 2 — mutex + single close site; stress-tested)
+- [x] ~~Snapshots never carried fast_forward/speed_multiplier~~ (Fixed July 2 — caught by the new end-to-end test; FF button now server-derived and reload-safe)
+- [x] ~~Same-second connections got identical client IDs~~ (Fixed July 2 — counter-suffixed IDs)
+- [x] ~~Concurrent joins could create duplicate rooms with doubled game loops~~ (Fixed July 2 — atomic get-or-create)
 
 ---
 
 ## 🔧 Technical Debt
 
-- [ ] Optimize pathfinding for large grids
-- [ ] Reduce WebSocket message size
+- [x] Optimize pathfinding for large grids ✅ (July 2 — integer-indexed BFS with parent reconstruction: 47× faster, 294× fewer allocations, byte-identical paths)
+- [x] Reduce WebSocket message size ✅ (July 2 — enemy paths no longer serialized (~27% of snapshot payload); envelope wrapping no longer re-parses the snapshot (~7.7× less JSON CPU))
 - [ ] Add error boundaries in React
-- [ ] Add server-side validation for tower placement
+- [ ] Add server-side validation for tower placement (bounds, occupied cells, spawn/goal cells — server currently checks gold only)
 - [ ] Rate limiting for actions
 - [ ] Connection recovery on network loss
 - [ ] State synchronization on reconnect
+- [ ] Single-source gameplay constants (tower costs/ranges, enemy glossary are hand-mirrored in the client — consider a server-sent config on join)
+- [ ] Delete or clearly quarantine `game-engine/` (legacy Rust prototype with diverged stats) and `database/` (unused schema)
 
 ---
 
@@ -410,5 +418,75 @@
 
 ---
 
-**Last Updated**: July 1, 2026
-**Status**: Phase 16 Complete ✅ | Next: sound, special towers, deployment (Phases 17+) 🚧
+## 🎉 Recent Achievements (July 2, 2026)
+
+### Documentation Audit + Code Quality/Performance Pass
+
+1. **Audit** — every TODO checkbox and README claim verified against code
+   (details in SESSION-LOG.md). Most held up; the confirmed-wrong ones are
+   fixed and regression-tested, the stale docs (SETUP.md, project structure,
+   Postgres/A* claims) are corrected.
+
+2. **Correctness fixes** (all previously latent, all now tested)
+   - Trapped enemies stop instead of leaking damage and vanishing
+   - Fully-blocked wave start completes instead of soft-locking
+   - Hub clients map race + double-close panic paths eliminated
+   - start_wave / join_room TOCTOU races closed (atomic phase gate, atomic room create)
+   - Snapshots now carry fast_forward; FF button survives page reload
+   - Unique client IDs; spawn-cancel captured before phase flip
+
+3. **Server performance**
+   - Broadcast envelope no longer unmarshals+remarshals every snapshot (~7.7× less JSON work/tick)
+   - Enemy paths dropped from the wire (~27% smaller snapshots)
+   - BFS rewritten: 2.6µs vs 122µs per search, byte-identical paths (equivalence-tested)
+   - Stat tables hoisted, squared-distance comparisons, in-place slice filtering
+
+4. **Client performance**
+   - Removed the 60/sec console.log of every snapshot (retained objects, burned CPU)
+   - React commits throttled to 10 Hz with trailing edge + instant phase flushes;
+     canvas keeps reading every snapshot at 60 FPS via a live ref
+   - WebSocket hook delivers via subscription (no more 2 App renders per message);
+     StrictMode socket leak fixed
+   - Grid drawn in 1 stroke instead of 37; AOE explosion animation clamp
+   - ESLint config restored (lint was inoperable); all hook-deps warnings fixed
+
+5. **Dead code removed** — legacy room system, clear_all remnants,
+   `server/cmd/main.go` (+ godotenv dep), duplicated client BFS,
+   root package.json/lock, structure.txt
+
+6. **New test suite** — 22 tests: behavior, pathfinding equivalence,
+   hub concurrency, and a full end-to-end WebSocket game flow (`go test ./...`)
+
+---
+
+## 🎉 Recent Achievements (July 3, 2026)
+
+### Visual Overhaul — "NEON IRONLINE" + The Switchback map
+
+1. **Map**: three permanent bulkheads (server-authoritative obstacles) turn the
+   straight 20-cell lane into a 44-cell S-route with three chokepoints.
+   Pathfinding, placement validation (new: bounds/occupied/wall/portal/type
+   checks server-side), and the client renderer all share one obstacle list.
+   ⚠️ Balance note: the longer route makes waves meaningfully easier at the
+   same wave numbers — difficulty retune is a candidate follow-up.
+2. **Rendering**: full canvas rewrite — shape-first design (towers = static
+   geometric hardware with rotating turrets; enemies = heading-rotated craft),
+   pre-rendered static board, glow sprites instead of per-frame shadowBlur,
+   Path2D geometry cache, per-type projectiles, directional muzzle flashes,
+   additive explosions, animated portals, target reticles, upgrade pips,
+   stasis cages, damage-gated health bars.
+3. **UI**: monospace HUD shell — chamfered buttons, corner-bracket panels,
+   LABEL/value stat bar, tower buttons with live SVG silhouettes, enemy
+   glossary/wave-preview with shape glyphs, CRT scanline film.
+4. **Fixed along the way**: canvas clicks now use the click's own coordinates
+   (the old hover-ref lagged one render — automation/fast clicks placed on the
+   wrong cell); enemy names got codenames (Dart/Needle/Bastion/Dreadnought).
+5. **Verified**: full Go test suite (26 tests incl. new map/validation tests,
+   path-equivalence re-proven over the bulkhead map), eslint + tsc clean, and
+   screenshot-driven browser verification of idle/placement/invalid-hover/
+   selection/combat/upgrade/glossary states via Playwright + Edge.
+
+---
+
+**Last Updated**: July 3, 2026
+**Status**: Phase 16 Complete ✅ + quality pass + visual overhaul 🎨 | Next: sound, special towers, deployment (Phases 17+) 🚧

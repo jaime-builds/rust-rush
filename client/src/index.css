@@ -1,11 +1,26 @@
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* NEON IRONLINE palette — canvas twin lives in GameCanvas.tsx PALETTE */
+  --bg-0: #04070F;
+  --bg-1: #0A1220;
+  --panel: rgba(13, 22, 38, 0.85);
+  --line: #1C2C48;
+  --text: #D9E8FF;
+  --text-dim: #7C90B0;
+  --cyan: #00E5FF;
+  --violet: #B388FF;
+  --yellow: #FFD60A;
+  --azure: #3D8BFF;
+  --danger: #FF4655;
+  --ok: #35F58C;
+  --gold: #FFD60A;
+
+  font-family: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, "Roboto Mono", monospace;
   line-height: 1.5;
   font-weight: 400;
 
   color-scheme: dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #0a0a0a;
+  color: var(--text);
+  background-color: var(--bg-0);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -23,6 +38,17 @@ body {
   place-items: center;
   min-width: 320px;
   min-height: 100vh;
+  background: var(--bg-0);
+}
+
+/* CRT scanline film over everything */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 999;
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 3px);
 }
 
 h1, h2, h3, h4, h5, h6 {

@@ -2,8 +2,11 @@ package websocket
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"rust-rush/server/internal/game"
@@ -77,27 +80,20 @@ func (c *Client) handleMessage(msg *Message) {
 	switch msg.Type {
 	case MessageTypeJoinRoom:
 		if msg.RoomID != "" {
-			c.roomID = msg.RoomID
+			c.hub.setClientRoom(c, msg.RoomID)
 
-			// Create a shooting room if it doesn't exist
-			_, exists := c.hub.gameManager.GetShootingRoom(msg.RoomID)
-			if !exists {
-				room := c.hub.gameManager.CreateShootingRoom(msg.RoomID)
-
-				// Start game loop for this room
+			// Check-and-create is atomic so two clients joining at once can't
+			// create duplicate rooms (each with its own 60 FPS game loop).
+			room, created := c.hub.gameManager.GetOrCreateShootingRoom(msg.RoomID)
+			if created {
+				room.SetSpawnGoal(game.Position{X: 0, Y: 7}, game.Position{X: 19, Y: 7})
 				go c.hub.gameManager.StartGameLoop(msg.RoomID)
-
 				log.Printf("Created new shooting room: %s", msg.RoomID)
-
-				// Set spawn and goal points
-				room.SpawnPoint = &game.Position{X: 0, Y: 7}
-				room.GoalPoint = &game.Position{X: 19, Y: 7}
 			}
 
 			c.hub.gameManager.AddPlayer(msg.RoomID, c.id)
 
 			// Send confirmation with current game state
-			room, _ := c.hub.gameManager.GetShootingRoom(msg.RoomID)
 			snapshot := room.GetSnapshot()
 
 			response := Message{
@@ -117,7 +113,7 @@ func (c *Client) handleMessage(msg *Message) {
 	case MessageTypeLeaveRoom:
 		if c.roomID != "" {
 			c.hub.gameManager.RemovePlayer(c.roomID, c.id)
-			c.roomID = ""
+			c.hub.setClientRoom(c, "")
 		}
 
 	case MessageTypePlaceTower:
@@ -148,14 +144,18 @@ func (c *Client) handleMessage(msg *Message) {
 			return
 		}
 
-		// Add tower to game state (deducts gold)
-		tower, ok := room.AddTower(x, y, towerType)
-		if !ok {
-			log.Printf("Client %s cannot afford %s tower", c.id, towerType)
+		// Add tower to game state (validates placement, deducts gold)
+		tower, err := room.AddTower(x, y, towerType)
+		if err != nil {
+			status := "invalid_placement"
+			if errors.Is(err, game.ErrInsufficientGold) {
+				status = "insufficient_funds"
+			}
+			log.Printf("Client %s tower placement rejected (%s at %.0f,%.0f): %v", c.id, towerType, x, y, err)
 			response := Message{
 				Type: MessageTypePlaceTower,
 				Payload: map[string]interface{}{
-					"status": "insufficient_funds",
+					"status": status,
 				},
 			}
 			c.sendJSON(response)
@@ -262,53 +262,36 @@ func (c *Client) handleMessage(msg *Message) {
 			return
 		}
 
-		// Extract enemy type and path
+		// Extract enemy type
 		enemyType := "basic"
 		if et, ok := msg.Payload["enemy_type"].(string); ok {
 			enemyType = et
 		}
 
-		// Get path from payload
-		var path []game.Position
-		if pathData, ok := msg.Payload["path"].([]interface{}); ok {
-			for _, p := range pathData {
-				if posMap, ok := p.(map[string]interface{}); ok {
-					x, xOk := posMap["x"].(float64)
-					y, yOk := posMap["y"].(float64)
-					if xOk && yOk {
-						path = append(path, game.Position{X: x, Y: y})
-					}
-				}
-			}
+		// The server computes the path itself, exactly like wave spawns —
+		// client-supplied paths were trusted verbatim (and the old no-path
+		// fallback was a straight spawn→goal line through the maze).
+		path := room.FindPathFromSpawn()
+		if path == nil {
+			log.Printf("Debug spawn skipped in room %s — path blocked", roomID)
+			return
 		}
 
-		// If no path provided, use a default path
-		if len(path) == 0 {
-			if room.SpawnPoint != nil && room.GoalPoint != nil {
-				path = []game.Position{
-					*room.SpawnPoint,
-					*room.GoalPoint,
-				}
-			}
+		enemy := room.AddEnemy(enemyType, path, 1) // wave 1 = unscaled stats for debug spawns
+		log.Printf("Spawned %s enemy with ID %d in room %s", enemyType, enemy.ID, roomID)
+
+		// Broadcast updated state
+		c.hub.BroadcastGameState(roomID)
+
+		// Send acknowledgment
+		response := Message{
+			Type: MessageTypeSpawnEnemy,
+			Payload: map[string]interface{}{
+				"status": "spawned",
+				"enemy":  enemy,
+			},
 		}
-
-		if len(path) > 0 {
-			enemy := room.AddEnemy(enemyType, path, 1) // wave 1 = unscaled stats for debug spawns
-			log.Printf("Spawned %s enemy with ID %d in room %s", enemyType, enemy.ID, roomID)
-
-			// Broadcast updated state
-			c.hub.BroadcastGameState(roomID)
-
-			// Send acknowledgment
-			response := Message{
-				Type: MessageTypeSpawnEnemy,
-				Payload: map[string]interface{}{
-					"status": "spawned",
-					"enemy":  enemy,
-				},
-			}
-			c.sendJSON(response)
-		}
+		c.sendJSON(response)
 
 	case MessageTypeSetSpeed:
 		roomID := msg.RoomID
@@ -452,6 +435,11 @@ func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	go client.readPump()
 }
 
+// clientIDCounter disambiguates connections; the old timestamp-only format
+// ("...05999" — the bare 999 is a literal, not fractional seconds) gave every
+// connection in the same wall-clock second an identical ID.
+var clientIDCounter atomic.Uint64
+
 func generateClientID() string {
-	return "client-" + time.Now().Format("20060102150405999")
+	return fmt.Sprintf("client-%s-%d", time.Now().Format("20060102150405"), clientIDCounter.Add(1))
 }
