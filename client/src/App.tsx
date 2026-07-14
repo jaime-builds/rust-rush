@@ -143,6 +143,15 @@ function App() {
     })
   }, [hasJoined, sendMessage])
 
+  const handleEvolveTower = useCallback((towerId: number, evolution: string) => {
+    if (!hasJoined) return
+    sendMessage({
+      type: 'evolve_tower',
+      room_id: ROOM_ID,
+      payload: { tower_id: towerId, evolution }
+    })
+  }, [hasJoined, sendMessage])
+
   const handleStartWave = useCallback(() => {
     if (!hasJoined || liveStateRef.current.phase !== 'waiting') return
     sendMessage({ type: 'start_wave', room_id: ROOM_ID })
@@ -261,6 +270,7 @@ function App() {
           onPlaceTower={handlePlaceTower}
           onSellTower={handleSellTower}
           onUpgradeTower={handleUpgradeTower}
+          onEvolveTower={handleEvolveTower}
           onStartWave={handleStartWave}
           onNewGame={handleNewGame}
           onSpawnEnemy={handleSpawnEnemy}

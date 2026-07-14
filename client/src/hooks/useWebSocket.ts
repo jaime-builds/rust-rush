@@ -7,6 +7,7 @@ export type MessageType =
   | 'place_tower'
   | 'remove_tower'
   | 'upgrade_tower'
+  | 'evolve_tower'
   | 'set_speed'
   | 'start_wave'
   | 'pause_game' // server-side stub, not implemented

@@ -16,6 +16,7 @@ const (
 	MessageTypePlaceTower   = "place_tower"
 	MessageTypeRemoveTower  = "remove_tower"
 	MessageTypeUpgradeTower = "upgrade_tower"
+	MessageTypeEvolveTower  = "evolve_tower"
 	MessageTypeSetSpeed     = "set_speed"
 	MessageTypeStartWave    = "start_wave"
 	MessageTypePauseGame    = "pause_game"

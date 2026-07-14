@@ -12,7 +12,8 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 ### ✅ Fully Implemented (Alpha Complete!)
 
 #### Core Gameplay
-- **Interactive Tower Placement** — Click to place 4 tower types on a 20×15 grid
+- **Interactive Tower Placement** — Click to place 5 tower types on a 20×15 grid
+- **Tower Evolution** — Every MAX-level tower can permanently evolve into one of two terminal forms (10 in total)
 - **Tower Sell System** — Click any tower to select it, view stats, and sell for 70% refund of total spent
 - **Tower Upgrades** — Upgrade towers up to level 4 for +20% damage and +10% range per level; slow and splash towers also improve their special effects
 - **Gold Economy** — Towers cost gold, enemies reward gold on death (scaled by type)
@@ -66,6 +67,7 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 | Sniper — "Railgun"   | $100 | 6.0   | 50     | 0.5/sec   | Long-range, high single-target                       |
 | Splash — "Mortar"    | $75  | 2.5   | 10     | 1.5/sec   | AOE: 60% damage in 1.5u radius, upgrades increase both |
 | Slow — "Stasis"      | $60  | 3.5   | 8      | 0.8/sec   | 60% speed reduction, upgrades extend duration/strength |
+| Tesla                | $150 | 4.0   | 20     | 0.8/sec   | Chain lightning: arcs to 2 nearby enemies at 50% damage; upgrades add arcs and reach (up to 5 at MK4) |
 
 ### Tower Upgrades
 
@@ -77,6 +79,30 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 | 4 MAX | = base cost | +73%   | +33%  | 3 gold rings, MAX badge       |
 
 Sell at any level refunds 70% of total gold spent.
+
+### Tower Evolution
+
+At level 4 (MAX), every tower can **evolve** into one of two permanent terminal
+forms. Evolving costs **2× everything spent on the tower so far**, and that cost
+is added to the tower's value (selling still refunds 70% of the total). The
+choice is permanent — no undo, no further upgrades, no re-evolving — so the UI
+asks for confirmation, the only action in the game that does.
+
+| Base    | Evolution     | Identity |
+|---------|---------------|----------|
+| Pulse   | Breach        | Close-range shredder — 55 dmg at 1.4/s, shorter reach |
+| Pulse   | Barrage       | 3-shot volley at separate targets |
+| Railgun | Piercer       | The rail shot punches through everything along its line |
+| Railgun | Executioner   | Double damage below 20% health |
+| Mortar  | Cluster       | 3.5u blast at full splash damage |
+| Mortar  | Siege         | 60 dmg direct hits, pinpoint splash |
+| Stasis  | Cryo Field    | Constant 40%-speed slow field, fires nothing |
+| Stasis  | Deep Freeze   | Severe slow + 25% chance to root for 1.5s |
+| Tesla   | Laser         | Continuous beam, 60 damage/sec, no travel time |
+| Tesla   | Amplifier     | No damage; nearby towers get +25% damage and fire rate |
+
+Each evolved form has its own silhouette on the board, and the in-game
+glossary (Tower Registry tab) lists every path with stats and costs.
 
 ### Enemy Types
 
@@ -116,7 +142,7 @@ validation, and the client renderer all read the same obstacle list.
 ### 🚧 Coming Next
 - Sound effects
 - Special stat display in upgrade panel (slow duration, splash radius)
-- Special towers (freeze, tesla, mortar, laser)
+- Difficulty retune for the Switchback map
 
 ## 🏗️ Architecture
 
@@ -306,6 +332,11 @@ cd server && go run main.go
 - [x] Wave preview shows next wave composition, updates after each wave
 - [x] Glossary panel opens/closes, colors match canvas enemies
 - [x] Production build: `npm run build` + `go run main.go` serves the game on 8080
+- [x] Tesla chain lightning arcs to nearby enemies at 50% damage
+- [x] Evolution gated to MK4, costs 2× total spent, requires confirmation
+- [x] All 10 evolved forms function and render distinct silhouettes
+- [x] Evolved towers can't upgrade or re-evolve; sell still refunds 70%
+- [x] Glossary Tower Registry lists all towers and evolution paths
 
 ## 🐛 Known Issues
 
@@ -315,8 +346,9 @@ cd server && go run main.go
 ## 🚀 Future Plans
 
 ### Short Term
-- Special towers (freeze, tesla, mortar, laser)
 - Special stat display in upgrade panel
+- Difficulty retune for the Switchback map
+- Evolution cost balancing (2× multiplier is a first draft)
 
 ### Medium Term
 - Sound effects and background music

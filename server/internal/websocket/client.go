@@ -244,6 +244,56 @@ func (c *Client) handleMessage(msg *Message) {
 			})
 		}
 
+	case MessageTypeEvolveTower:
+		roomID := msg.RoomID
+		if roomID == "" {
+			roomID = c.roomID
+		}
+		if roomID == "" {
+			return
+		}
+		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
+		if !exists {
+			return
+		}
+		towerID, idOk := msg.Payload["tower_id"].(float64)
+		evolution, evoOk := msg.Payload["evolution"].(string)
+		if !idOk || !evoOk {
+			log.Printf("Invalid evolve_tower payload: %v", msg.Payload)
+			return
+		}
+		tower, err := room.EvolveTower(int(towerID), evolution)
+		if err != nil {
+			status := "failed"
+			switch {
+			case errors.Is(err, game.ErrNotMaxLevel):
+				status = "not_max_level"
+			case errors.Is(err, game.ErrAlreadyEvolved):
+				status = "already_evolved"
+			case errors.Is(err, game.ErrInsufficientGold):
+				status = "insufficient_funds"
+			case errors.Is(err, game.ErrInvalidEvolution):
+				status = "invalid_evolution"
+			}
+			log.Printf("Client %s evolution rejected (tower %d → %s): %v", c.id, int(towerID), evolution, err)
+			c.sendJSON(Message{
+				Type: MessageTypeEvolveTower,
+				Payload: map[string]interface{}{
+					"status": status,
+				},
+			})
+			return
+		}
+		log.Printf("⚡ Evolved tower %d into %s in room %s", int(towerID), evolution, roomID)
+		c.hub.BroadcastGameState(roomID)
+		c.sendJSON(Message{
+			Type: MessageTypeEvolveTower,
+			Payload: map[string]interface{}{
+				"status": "evolved",
+				"tower":  tower,
+			},
+		})
+
 	case MessageTypeSpawnEnemy:
 		// Use room_id from message if provided, otherwise use client's stored roomID
 		roomID := msg.RoomID

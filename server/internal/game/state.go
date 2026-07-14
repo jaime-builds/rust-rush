@@ -3,6 +3,7 @@ package game
 import (
 	"errors"
 	"math"
+	"math/rand"
 	"sync"
 )
 
@@ -136,6 +137,13 @@ type Tower struct {
 	// Splash tower upgrade fields
 	AOERadius float64 `json:"aoe_radius_upgrade,omitempty"`
 	AOEDamage float64 `json:"aoe_damage_pct_upgrade,omitempty"`
+	// Tesla chain lightning fields (scale with level)
+	ChainCount  int     `json:"chain_count,omitempty"`
+	ChainRadius float64 `json:"chain_radius,omitempty"`
+	// Evolution state: true once the tower has taken a terminal form (its
+	// TowerType is then one of the ten evolved type strings).
+	Evolved   bool `json:"evolved,omitempty"`
+	MultiShot int  `json:"multi_shot,omitempty"`
 }
 
 // Enemy represents a hostile unit
@@ -148,6 +156,8 @@ type Enemy struct {
 	Speed         float64    `json:"speed"`
 	SlowDuration  float64    `json:"slow_duration"`
 	SlowMultiplier float64   `json:"slow_multiplier"`
+	// RootDuration > 0 pins the enemy in place entirely (Deep Freeze).
+	RootDuration float64 `json:"root_duration,omitempty"`
 	// Path and PathIndex are server-internal: nothing in the client reads
 	// them, and serializing every enemy's full waypoint list was ~27% of the
 	// 60 Hz snapshot payload.
@@ -169,6 +179,22 @@ type Projectile struct {
 	IsAOE     bool     `json:"is_aoe"`
 	AOERadius float64  `json:"aoe_radius"`
 	AOEDamage float64  `json:"aoe_damage"`
+	// Pierce (Piercer): the shot flies a fixed straight line and damages
+	// every enemy it passes, each once. It ignores TargetID after launch.
+	Pierce    bool    `json:"pierce,omitempty"`
+	dirX      float64
+	dirY      float64
+	rangeLeft float64
+	hitIDs    []int
+	// Chain lightning (Tesla): on hit, arc to up to chainCount enemies within
+	// chainRadius, dealing chainDamage each. Baked at fire time.
+	chainCount  int
+	chainRadius float64
+	chainDamage float64
+	// Execute (Executioner): damage × execBonus when the target is below
+	// execThreshold of max health at hit time.
+	execThreshold float64
+	execBonus     float64
 }
 
 // MuzzleFlash represents a visual effect when tower shoots
@@ -186,6 +212,15 @@ type Explosion struct {
 	Radius   float64  `json:"radius"`
 }
 
+// Arc is a short-lived lightning-arc visual between two points (Tesla chain
+// hits). Purely cosmetic — damage is applied when the arc is created.
+type Arc struct {
+	ID       int      `json:"id"`
+	From     Position `json:"from"`
+	To       Position `json:"to"`
+	Duration float64  `json:"duration"`
+}
+
 // WavePreviewEntry summarizes one enemy group of a wave for the client UI
 type WavePreviewEntry struct {
 	EnemyType string `json:"enemy_type"`
@@ -201,6 +236,7 @@ type GameStateWithShooting struct {
 	Projectiles      []Projectile  `json:"projectiles"`
 	MuzzleFlashes    []MuzzleFlash `json:"muzzle_flashes"`
 	Explosions       []Explosion   `json:"explosions"`
+	Arcs             []Arc         `json:"arcs,omitempty"`
 	Gold             int           `json:"gold"`
 	Health           int           `json:"health"`
 	Score            int           `json:"score"`
@@ -236,6 +272,7 @@ func NewGameStateWithShooting(roomID string) *GameStateWithShooting {
 		Projectiles:      make([]Projectile, 0),
 		MuzzleFlashes:    make([]MuzzleFlash, 0),
 		Explosions:       make([]Explosion, 0),
+		Arcs:             make([]Arc, 0),
 		Gold:             200,
 		Health:           100,
 		Score:            0,
@@ -265,6 +302,7 @@ func (gs *GameStateWithShooting) Reset() {
 	gs.Projectiles = make([]Projectile, 0)
 	gs.MuzzleFlashes = make([]MuzzleFlash, 0)
 	gs.Explosions = make([]Explosion, 0)
+	gs.Arcs = make([]Arc, 0)
 	gs.Gold = 200
 	gs.Health = 100
 	gs.Score = 0
@@ -316,8 +354,43 @@ func (gs *GameStateWithShooting) Update(deltaTime float64) {
 }
 
 func (gs *GameStateWithShooting) updateTowers(deltaTime float64) {
+	// Amplifier pass first: a tower inside any amplifier's radius gets its
+	// damage and fire rate buffed. Buffs do not stack — one amplifier's worth,
+	// no matter how many overlap.
+	var ampIdx []int
+	for i := range gs.Towers {
+		if gs.Towers[i].TowerType == "amplifier" {
+			ampIdx = append(ampIdx, i)
+		}
+	}
+	buffFor := func(t *Tower) (dmgMult, rateMult float64) {
+		for _, ai := range ampIdx {
+			amp := &gs.Towers[ai]
+			if amp.ID == t.ID {
+				continue
+			}
+			if distanceSquared(amp.Position, t.Position) <= amp.Range*amp.Range {
+				es, _ := getEvolvedStats("amplifier")
+				return es.AuraDamageMult, es.AuraRateMult
+			}
+		}
+		return 1.0, 1.0
+	}
+
 	for i := range gs.Towers {
 		tower := &gs.Towers[i]
+
+		switch tower.TowerType {
+		case "amplifier":
+			// Pure support hardware: no target, no shots.
+			tower.CurrentTarget = 0
+			continue
+		case "cryo_field":
+			// Continuous slow aura instead of shots.
+			tower.CurrentTarget = 0
+			gs.applyCryoAura(tower)
+			continue
+		}
 
 		if tower.Cooldown > 0 {
 			tower.Cooldown -= deltaTime
@@ -334,15 +407,52 @@ func (gs *GameStateWithShooting) updateTowers(deltaTime float64) {
 		dy := target.Position.Y - tower.Position.Y
 		tower.Rotation = math.Atan2(dy, dx)
 
+		dmgMult, rateMult := buffFor(tower)
+
+		// Laser: continuous beam — damage applies every tick the beam holds a
+		// target, no projectile, no cooldown. Damage stat is DPS.
+		if tower.TowerType == "laser" {
+			target.Health -= tower.Damage * dmgMult * deltaTime
+			continue
+		}
+
 		if tower.Cooldown <= 0 {
-			gs.shootProjectile(tower, target)
-			tower.Cooldown = 1.0 / tower.FireRate
+			if tower.TowerType == "barrage" && tower.MultiShot > 1 {
+				// Volley at up to MultiShot distinct nearest targets.
+				for _, t := range gs.findNearestEnemies(tower.Position, tower.Range, tower.MultiShot) {
+					gs.shootProjectile(tower, t, dmgMult)
+				}
+			} else {
+				gs.shootProjectile(tower, target, dmgMult)
+			}
+			tower.Cooldown = 1.0 / (tower.FireRate * rateMult)
 			gs.MuzzleFlashes = append(gs.MuzzleFlashes, MuzzleFlash{
 				ID:       gs.nextEffectID,
 				Position: tower.Position,
 				Duration: 0.1,
 			})
 			gs.nextEffectID++
+		}
+	}
+}
+
+// applyCryoAura slows every enemy in range continuously. It never overrides a
+// stronger per-hit slow (a lower multiplier is a stronger slow); it re-applies
+// each tick, so the debuff fades almost immediately after leaving the aura.
+func (gs *GameStateWithShooting) applyCryoAura(tower *Tower) {
+	es, _ := getEvolvedStats("cryo_field")
+	rangeSq := tower.Range * tower.Range
+	for i := range gs.Enemies {
+		enemy := &gs.Enemies[i]
+		if distanceSquared(tower.Position, enemy.Position) > rangeSq {
+			continue
+		}
+		if enemy.SlowDuration > 0 && enemy.SlowMultiplier < es.AuraSlowMultiplier {
+			continue // an active stasis/deep-freeze slow is stronger — keep it
+		}
+		enemy.SlowMultiplier = es.AuraSlowMultiplier
+		if enemy.SlowDuration < 0.15 {
+			enemy.SlowDuration = 0.15
 		}
 	}
 }
@@ -363,10 +473,47 @@ func (gs *GameStateWithShooting) findNearestEnemy(pos Position, maxRange float64
 	return nearest
 }
 
-func (gs *GameStateWithShooting) shootProjectile(tower *Tower, target *Enemy) {
+// findNearestEnemies returns up to n distinct enemies in range, nearest first
+// (barrage volleys). n is small (≤3), so repeated scans beat sorting.
+func (gs *GameStateWithShooting) findNearestEnemies(pos Position, maxRange float64, n int) []*Enemy {
+	maxRangeSq := maxRange * maxRange
+	picked := make([]*Enemy, 0, n)
+	taken := make(map[int]bool, n)
+	for len(picked) < n {
+		var nearest *Enemy
+		minDistSq := math.MaxFloat64
+		for i := range gs.Enemies {
+			enemy := &gs.Enemies[i]
+			if taken[enemy.ID] {
+				continue
+			}
+			distSq := distanceSquared(pos, enemy.Position)
+			if distSq <= maxRangeSq && distSq < minDistSq {
+				minDistSq = distSq
+				nearest = enemy
+			}
+		}
+		if nearest == nil {
+			break
+		}
+		picked = append(picked, nearest)
+		taken[nearest.ID] = true
+	}
+	return picked
+}
+
+var projectileSpeedByType = map[string]float64{
+	"sniper":      12.0,
+	"piercer":     14.0,
+	"executioner": 12.0,
+	"tesla":       10.0,
+	"breach":      9.0,
+}
+
+func (gs *GameStateWithShooting) shootProjectile(tower *Tower, target *Enemy, dmgMult float64) {
 	speed := 8.0
-	if tower.TowerType == "sniper" {
-		speed = 12.0
+	if s, ok := projectileSpeedByType[tower.TowerType]; ok {
+		speed = s
 	}
 
 	proj := Projectile{
@@ -374,11 +521,12 @@ func (gs *GameStateWithShooting) shootProjectile(tower *Tower, target *Enemy) {
 		Position: tower.Position,
 		TargetID: target.ID,
 		Speed:    speed,
-		Damage:   tower.Damage,
+		Damage:   tower.Damage * dmgMult,
 		TowerID:  tower.ID,
 	}
 
-	if tower.TowerType == "splash" {
+	switch tower.TowerType {
+	case "splash", "cluster", "siege":
 		proj.IsAOE = true
 		// Use tower's upgraded AOE fields if set, fall back to defaults
 		if tower.AOERadius > 0 {
@@ -387,10 +535,32 @@ func (gs *GameStateWithShooting) shootProjectile(tower *Tower, target *Enemy) {
 			proj.AOERadius = defaultAOERadius
 		}
 		if tower.AOEDamage > 0 {
-			proj.AOEDamage = tower.Damage * tower.AOEDamage
+			proj.AOEDamage = proj.Damage * tower.AOEDamage
 		} else {
-			proj.AOEDamage = tower.Damage * defaultAOEDamagePct
+			proj.AOEDamage = proj.Damage * defaultAOEDamagePct
 		}
+	case "tesla":
+		proj.chainCount = tower.ChainCount
+		proj.chainRadius = tower.ChainRadius
+		proj.chainDamage = proj.Damage * teslaChainDamagePct
+	case "piercer":
+		// Fixed straight line through the target, out to the tower's range
+		// (plus a little, so edge-of-range targets are still fully crossed).
+		dx := target.Position.X - tower.Position.X
+		dy := target.Position.Y - tower.Position.Y
+		dist := math.Sqrt(dx*dx + dy*dy)
+		if dist == 0 {
+			dist = 1
+			dx = 1
+		}
+		proj.Pierce = true
+		proj.dirX = dx / dist
+		proj.dirY = dy / dist
+		proj.rangeLeft = tower.Range + 0.5
+	case "executioner":
+		es, _ := getEvolvedStats("executioner")
+		proj.execThreshold = es.ExecuteThreshold
+		proj.execBonus = es.ExecuteBonus
 	}
 
 	gs.Projectiles = append(gs.Projectiles, proj)
@@ -404,6 +574,14 @@ func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
 
 	for i := range gs.Projectiles {
 		proj := &gs.Projectiles[i]
+
+		// Piercing shots fly a fixed line and damage everything they pass.
+		if proj.Pierce {
+			if gs.updatePierceProjectile(proj, deltaTime) {
+				active = append(active, *proj)
+			}
+			continue
+		}
 
 		var target *Enemy
 		for j := range gs.Enemies {
@@ -422,7 +600,12 @@ func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
 		dist := math.Sqrt(dx*dx + dy*dy)
 
 		if dist < 0.3 {
-			target.Health -= proj.Damage
+			damage := proj.Damage
+			// Execute: bonus damage against targets already near death.
+			if proj.execThreshold > 0 && target.Health <= target.MaxHealth*proj.execThreshold {
+				damage *= proj.execBonus
+			}
+			target.Health -= damage
 
 			// Slow towers debuff on hit — read the parameters from the firing
 			// tower itself so upgrades take effect (one lookup, not two).
@@ -433,7 +616,7 @@ func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
 					break
 				}
 			}
-			if firingTower != nil && firingTower.TowerType == "slow" {
+			if firingTower != nil && (firingTower.TowerType == "slow" || firingTower.TowerType == "deep_freeze") {
 				slowDuration := defaultSlowDuration
 				slowMultiplier := defaultSlowMultiplier
 				if firingTower.SlowDuration > 0 {
@@ -444,6 +627,20 @@ func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
 				}
 				target.SlowDuration = slowDuration
 				target.SlowMultiplier = slowMultiplier
+
+				// Deep Freeze: chance to root the target outright.
+				if firingTower.TowerType == "deep_freeze" {
+					es, _ := getEvolvedStats("deep_freeze")
+					if rootRoll() < es.RootChance {
+						target.RootDuration = es.RootDuration
+					}
+				}
+			}
+
+			// Chain lightning: arc from the primary target to nearby enemies,
+			// nearest-first, each arc jumping from the last enemy hit.
+			if proj.chainCount > 0 {
+				gs.applyChainLightning(proj, target)
 			}
 
 			// AOE splash: damage all enemies within radius, skipping the primary target
@@ -493,6 +690,89 @@ func (gs *GameStateWithShooting) updateProjectiles(deltaTime float64) {
 	gs.Projectiles = active
 }
 
+// updatePierceProjectile advances a piercing shot along its fixed line,
+// damaging each enemy it passes exactly once. Returns false once the shot has
+// spent its range.
+func (gs *GameStateWithShooting) updatePierceProjectile(proj *Projectile, deltaTime float64) bool {
+	step := proj.Speed * deltaTime
+	if step > proj.rangeLeft {
+		step = proj.rangeLeft
+	}
+	proj.Position.X += proj.dirX * step
+	proj.Position.Y += proj.dirY * step
+	proj.rangeLeft -= step
+
+	const hitRadiusSq = 0.5 * 0.5
+	for j := range gs.Enemies {
+		enemy := &gs.Enemies[j]
+		if enemy.Health <= 0 {
+			continue
+		}
+		if distanceSquared(proj.Position, enemy.Position) > hitRadiusSq {
+			continue
+		}
+		alreadyHit := false
+		for _, id := range proj.hitIDs {
+			if id == enemy.ID {
+				alreadyHit = true
+				break
+			}
+		}
+		if alreadyHit {
+			continue
+		}
+		proj.hitIDs = append(proj.hitIDs, enemy.ID)
+		enemy.Health -= proj.Damage
+		gs.Explosions = append(gs.Explosions, Explosion{
+			ID:       gs.nextEffectID,
+			Position: enemy.Position,
+			Duration: 0.25,
+			Radius:   0.4,
+		})
+		gs.nextEffectID++
+	}
+
+	return proj.rangeLeft > 0
+}
+
+// applyChainLightning arcs from the primary target through up to chainCount
+// additional enemies. Each arc jumps from the last enemy hit to the nearest
+// un-hit enemy within chainRadius of it.
+func (gs *GameStateWithShooting) applyChainLightning(proj *Projectile, primary *Enemy) {
+	radiusSq := proj.chainRadius * proj.chainRadius
+	hit := map[int]bool{primary.ID: true}
+	from := primary
+
+	for c := 0; c < proj.chainCount; c++ {
+		var next *Enemy
+		minDistSq := radiusSq
+		for j := range gs.Enemies {
+			enemy := &gs.Enemies[j]
+			if hit[enemy.ID] || enemy.Health <= 0 {
+				continue
+			}
+			distSq := distanceSquared(from.Position, enemy.Position)
+			if distSq <= minDistSq {
+				minDistSq = distSq
+				next = enemy
+			}
+		}
+		if next == nil {
+			break
+		}
+		next.Health -= proj.chainDamage
+		gs.Arcs = append(gs.Arcs, Arc{
+			ID:       gs.nextEffectID,
+			From:     from.Position,
+			To:       next.Position,
+			Duration: 0.18,
+		})
+		gs.nextEffectID++
+		hit[next.ID] = true
+		from = next
+	}
+}
+
 func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
 	alive := gs.Enemies[:0] // in-place filter, same pattern as updateProjectiles
 
@@ -515,6 +795,14 @@ func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
 			} else {
 				effectiveSpeed = enemy.Speed * enemy.SlowMultiplier
 			}
+		}
+		// Root (Deep Freeze) pins the enemy entirely and outranks any slow.
+		if enemy.RootDuration > 0 {
+			enemy.RootDuration -= deltaTime
+			if enemy.RootDuration < 0 {
+				enemy.RootDuration = 0
+			}
+			effectiveSpeed = 0
 		}
 
 		if enemy.Path != nil && len(enemy.Path) > 0 && enemy.PathIndex < len(enemy.Path) {
@@ -579,6 +867,16 @@ func (gs *GameStateWithShooting) updateEffects(deltaTime float64) {
 		}
 	}
 	gs.Explosions = activeExplosions
+
+	activeArcs := gs.Arcs[:0]
+	for i := range gs.Arcs {
+		arc := &gs.Arcs[i]
+		arc.Duration -= deltaTime
+		if arc.Duration > 0 {
+			activeArcs = append(activeArcs, *arc)
+		}
+	}
+	gs.Arcs = activeArcs
 }
 
 // Placement failure reasons, distinguished so the client ack can say why.
@@ -636,7 +934,7 @@ func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) (Tower
 		TotalSpent: cost,
 	}
 
-	// Initialize special fields for slow and splash towers
+	// Initialize special fields for slow, splash, and tesla towers
 	if towerType == "slow" {
 		tower.SlowDuration = defaultSlowDuration
 		tower.SlowMultiplier = defaultSlowMultiplier
@@ -644,6 +942,10 @@ func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) (Tower
 	if towerType == "splash" {
 		tower.AOERadius = defaultAOERadius
 		tower.AOEDamage = defaultAOEDamagePct
+	}
+	if towerType == "tesla" {
+		tower.ChainCount = defaultChainCount
+		tower.ChainRadius = defaultChainRadius
 	}
 
 	gs.Gold -= cost
@@ -692,7 +994,7 @@ func (gs *GameStateWithShooting) UpgradeTower(towerID int) (Tower, bool) {
 		if tower.ID != towerID {
 			continue
 		}
-		if tower.Level >= 4 {
+		if tower.Level >= 4 || tower.Evolved {
 			return Tower{}, false
 		}
 
@@ -723,6 +1025,14 @@ func (gs *GameStateWithShooting) UpgradeTower(towerID int) (Tower, bool) {
 		if tower.TowerType == "splash" {
 			tower.AOERadius = defaultAOERadius + float64(tower.Level-1)*0.3
 			tower.AOEDamage = defaultAOEDamagePct + float64(tower.Level-1)*0.10
+		}
+
+		// Tesla: the chain itself grows each level — one more arc target and
+		// a wider jump radius, on top of the standard damage/range curve.
+		// L1: 2 / 1.5u  L2: 3 / 1.7u  L3: 4 / 1.9u  L4: 5 / 2.1u
+		if tower.TowerType == "tesla" {
+			tower.ChainCount = defaultChainCount + (tower.Level - 1)
+			tower.ChainRadius = defaultChainRadius + float64(tower.Level-1)*0.2
 		}
 
 		return *tower, true
@@ -829,6 +1139,7 @@ func (gs *GameStateWithShooting) GetSnapshot() *GameStateWithShooting {
 		Projectiles:      make([]Projectile, len(gs.Projectiles)),
 		MuzzleFlashes:    make([]MuzzleFlash, len(gs.MuzzleFlashes)),
 		Explosions:       make([]Explosion, len(gs.Explosions)),
+		Arcs:             make([]Arc, len(gs.Arcs)),
 		Gold:             gs.Gold,
 		Health:           gs.Health,
 		Score:            gs.Score,
@@ -850,6 +1161,7 @@ func (gs *GameStateWithShooting) GetSnapshot() *GameStateWithShooting {
 	copy(snapshot.Projectiles, gs.Projectiles)
 	copy(snapshot.MuzzleFlashes, gs.MuzzleFlashes)
 	copy(snapshot.Explosions, gs.Explosions)
+	copy(snapshot.Arcs, gs.Arcs)
 
 	return snapshot
 }
@@ -875,7 +1187,16 @@ const (
 	defaultSlowMultiplier = 0.40
 	defaultAOERadius      = 1.5
 	defaultAOEDamagePct   = 0.60
+	// Tesla chain lightning: level 1 arcs to 2 extra enemies within 1.5u;
+	// count and radius both grow per level (Tesla's identity is multi-target,
+	// so its upgrades widen the chain instead of only raising damage).
+	defaultChainCount   = 2
+	defaultChainRadius  = 1.5
+	teslaChainDamagePct = 0.5
 )
+
+// rootRoll is math/rand behind a var so deep-freeze tests can pin the dice.
+var rootRoll = rand.Float64
 
 type towerStats struct {
 	Range    float64
@@ -892,12 +1213,14 @@ var (
 		"sniper": {Range: 6.0, Damage: 50.0, FireRate: 0.5},
 		"splash": {Range: 2.5, Damage: 10.0, FireRate: 1.5},
 		"slow":   {Range: 3.5, Damage: 8.0, FireRate: 0.8},
+		"tesla":  {Range: 4.0, Damage: 20.0, FireRate: 0.8},
 	}
 	towerCostByType = map[string]int{
 		"basic":  50,
 		"sniper": 100,
 		"splash": 75,
 		"slow":   60,
+		"tesla":  150,
 	}
 	enemyStatsByType = map[string]enemyStats{
 		"basic":  {Health: 100.0, Speed: 2.0},

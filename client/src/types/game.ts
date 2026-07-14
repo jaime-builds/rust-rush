@@ -9,7 +9,16 @@ export const GRID_WIDTH = 20
 export const GRID_HEIGHT = 15
 export const CELL_SIZE = 40
 
-export type TowerType = 'basic' | 'sniper' | 'splash' | 'slow'
+// The five placeable base towers.
+export type BaseTowerType = 'basic' | 'sniper' | 'splash' | 'slow' | 'tesla'
+// The ten permanent terminal forms (two per base tower).
+export type EvolvedTowerType =
+  | 'breach' | 'barrage'          // ← basic (Pulse)
+  | 'piercer' | 'executioner'     // ← sniper (Railgun)
+  | 'cluster' | 'siege'           // ← splash (Mortar)
+  | 'cryo_field' | 'deep_freeze'  // ← slow (Stasis)
+  | 'laser' | 'amplifier'         // ← tesla
+export type TowerType = BaseTowerType | EvolvedTowerType
 export type EnemyType = 'basic' | 'fast' | 'tank' | 'flying' | 'boss'
 export type GamePhase = 'waiting' | 'active' | 'game_over'
 
@@ -29,6 +38,10 @@ export interface Tower {
   slow_multiplier_upgrade?: number
   aoe_radius_upgrade?: number
   aoe_damage_pct_upgrade?: number
+  chain_count?: number
+  chain_radius?: number
+  evolved?: boolean
+  multi_shot?: number
 }
 
 export interface Enemy {
@@ -40,6 +53,7 @@ export interface Enemy {
   speed: number
   slow_duration?: number
   slow_multiplier?: number
+  root_duration?: number
 }
 
 export interface Projectile {
@@ -52,6 +66,15 @@ export interface Projectile {
   is_aoe?: boolean
   aoe_radius?: number
   aoe_damage?: number
+  pierce?: boolean
+}
+
+// Short-lived lightning arc between two points (Tesla chain hits).
+export interface Arc {
+  id: number
+  from: Position
+  to: Position
+  duration: number
 }
 
 export interface MuzzleFlash {
@@ -80,6 +103,7 @@ export interface GameState {
   projectiles: Projectile[]
   muzzle_flashes: MuzzleFlash[]
   explosions: Explosion[]
+  arcs?: Arc[]
   gold: number
   health: number
   score: number
@@ -98,9 +122,21 @@ export interface GameState {
 }
 
 // Tower costs — kept in sync with server
-export const TOWER_COSTS: Record<TowerType, number> = {
+export const TOWER_COSTS: Record<BaseTowerType, number> = {
   basic: 50,
   sniper: 100,
   splash: 75,
   slow: 60,
+  tesla: 150,
 }
+
+// Evolution paths — kept in sync with server evolutionOptions
+export const EVOLUTION_OPTIONS: Record<BaseTowerType, [EvolvedTowerType, EvolvedTowerType]> = {
+  basic: ['breach', 'barrage'],
+  sniper: ['piercer', 'executioner'],
+  splash: ['cluster', 'siege'],
+  slow: ['cryo_field', 'deep_freeze'],
+  tesla: ['laser', 'amplifier'],
+}
+
+export const isEvolvedType = (t: TowerType): t is EvolvedTowerType => !(t in TOWER_COSTS)

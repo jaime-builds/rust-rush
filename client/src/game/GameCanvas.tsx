@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import './GameCanvas.css'
 import {
-  Tower, TowerType, Enemy, EnemyType, Projectile, MuzzleFlash, Explosion, Position,
-  GameState, TOWER_COSTS, GRID_WIDTH, GRID_HEIGHT, CELL_SIZE,
+  Tower, TowerType, BaseTowerType, EvolvedTowerType, Enemy, EnemyType, Projectile,
+  MuzzleFlash, Explosion, Arc, Position, GameState,
+  TOWER_COSTS, EVOLUTION_OPTIONS, GRID_WIDTH, GRID_HEIGHT, CELL_SIZE,
 } from '../types/game'
 
 // ————————————————————————————————————————————————————————————————————————
@@ -47,11 +48,24 @@ const PALETTE = {
 }
 
 // Tower accents (cool faction) — used by the canvas AND the HTML buttons.
+// Evolved forms stay in their base tower's hue family (hue is the garnish);
+// the new silhouette is what actually announces the evolution.
 const TOWER_COLORS: Record<string, string> = {
   basic: '#00E5FF',
   sniper: '#B388FF',
   splash: '#FFD60A',
   slow: '#3D8BFF',
+  tesla: '#A8FF3E',
+  breach: '#00C0F0',
+  barrage: '#66F2FF',
+  piercer: '#CBA9FF',
+  executioner: '#8E5CFF',
+  cluster: '#FFE566',
+  siege: '#FFB300',
+  cryo_field: '#7FB8FF',
+  deep_freeze: '#2E7BFF',
+  laser: '#D6FF5E',
+  amplifier: '#6BFFA8',
 }
 
 const TOWER_LIGHT: Record<string, string> = {
@@ -59,13 +73,36 @@ const TOWER_LIGHT: Record<string, string> = {
   sniper: '#DCC8FF',
   splash: '#FFF3B0',
   slow: '#A6CFFF',
+  tesla: '#E2FFB0',
+  breach: '#8AE8FF',
+  barrage: '#C8FBFF',
+  piercer: '#E8DAFF',
+  executioner: '#C9AFFF',
+  cluster: '#FFF6C4',
+  siege: '#FFDB8A',
+  cryo_field: '#CFE5FF',
+  deep_freeze: '#9FC2FF',
+  laser: '#F0FFB8',
+  amplifier: '#C4FFDD',
 }
 
+// Kept in sync with server towerStatsByType + evolvedStatsByType.
 const TOWER_RANGES: Record<string, number> = {
   basic: 3.0,
   sniper: 6.0,
   splash: 2.5,
   slow: 3.5,
+  tesla: 4.0,
+  breach: 3.2,
+  barrage: 4.2,
+  piercer: 8.0,
+  executioner: 8.0,
+  cluster: 3.6,
+  siege: 3.6,
+  cryo_field: 4.5,
+  deep_freeze: 4.5,
+  laser: 5.5,
+  amplifier: 3.5,
 }
 
 const TOWER_NAMES: Record<string, string> = {
@@ -73,6 +110,36 @@ const TOWER_NAMES: Record<string, string> = {
   sniper: 'Railgun',
   splash: 'Mortar',
   slow: 'Stasis',
+  tesla: 'Tesla',
+  breach: 'Breach',
+  barrage: 'Barrage',
+  piercer: 'Piercer',
+  executioner: 'Executioner',
+  cluster: 'Cluster',
+  siege: 'Siege',
+  cryo_field: 'Cryo Field',
+  deep_freeze: 'Deep Freeze',
+  laser: 'Laser',
+  amplifier: 'Amplifier',
+}
+
+// One-liners for the evolve dialog and the tower glossary.
+const TOWER_DESCRIPTIONS: Record<string, string> = {
+  basic: 'Reliable workhorse turret — solid damage at a steady rate.',
+  sniper: 'Long-range single-target rail — slow, heavy hits.',
+  splash: 'Lobbed shells splash damage around the impact point.',
+  slow: 'Tags enemies with a stasis field that cuts their speed.',
+  tesla: 'Chain lightning arcs from the target to nearby enemies. Upgrades add arcs and reach.',
+  breach: 'Close-range shredder — much harder hits, faster firing, shorter reach.',
+  barrage: 'Fires a 3-shot volley at separate targets — volume over punch.',
+  piercer: 'The rail shot punches through everything along its line.',
+  executioner: 'Double damage against enemies below 20% health.',
+  cluster: 'Huge blast radius at full splash damage — chokepoint eraser.',
+  siege: 'Massive direct hits; the splash shrinks to a pinpoint.',
+  cryo_field: 'Constant slow field — everything in range crawls at 40% speed. Fires nothing.',
+  deep_freeze: 'Severe single-target slow, with a 25% chance to freeze solid for 1.5s.',
+  laser: 'Continuous beam — 60 damage per second, no travel time.',
+  amplifier: 'Deals no damage; nearby towers gain +25% damage and fire rate.',
 }
 
 // Enemy accents (warm faction) — single source for canvas + legend + preview.
@@ -109,6 +176,29 @@ const ENEMY_GLOSSARY: { type: EnemyType, name: string, health: number, speed: nu
   { type: 'tank', name: 'Bastion', health: 300, speed: 1.0, gold: 25, score: 30, appears: 'Wave 7+' },
   { type: 'boss', name: 'Dreadnought', health: 1000, speed: 0.5, gold: 100, score: 100, appears: 'Wave 11+' },
 ]
+
+// Tower stat sheet — kept in sync with server towerStatsByType / UpgradeTower.
+const TOWER_GLOSSARY: { type: BaseTowerType, damage: number, rate: number, upgradeNote: string }[] = [
+  { type: 'basic', damage: 15, rate: 1.0, upgradeNote: 'MK2–4: +20% dmg, +10% range per level' },
+  { type: 'sniper', damage: 50, rate: 0.5, upgradeNote: 'MK2–4: +20% dmg, +10% range per level' },
+  { type: 'splash', damage: 10, rate: 1.5, upgradeNote: 'MK2–4: +20% dmg, +10% range; blast 1.5u/60% → 2.4u/90%' },
+  { type: 'slow', damage: 8, rate: 0.8, upgradeNote: 'MK2–4: +20% dmg, +10% range; slow 2.0s/0.40× → 3.5s/0.25×' },
+  { type: 'tesla', damage: 20, rate: 0.8, upgradeNote: 'MK2–4: +20% dmg, +10% range; chain 2×/1.5u → 5×/2.1u' },
+]
+
+// Evolution stat lines — kept in sync with server evolvedStatsByType.
+const EVO_STATS: Record<EvolvedTowerType, string> = {
+  breach: '55 dmg · 1.4/s · 3.2 rng',
+  barrage: '18 dmg ×3 shots · 1.2/s · 4.2 rng',
+  piercer: '70 dmg thru-line · 0.5/s · 8.0 rng',
+  executioner: '95 dmg, ×2 under 20% HP · 0.6/s · 8.0 rng',
+  cluster: '14 dmg · 3.5u blast @ 100% · 1.5/s',
+  siege: '60 dmg · 1.2u blast @ 60% · 1.0/s',
+  cryo_field: 'no attack · 4.5u field · 40% speed',
+  deep_freeze: '15 dmg · 0.25× slow · 25% root 1.5s',
+  laser: '60 dmg/s beam · 5.5 rng',
+  amplifier: 'no attack · 3.5u aura · +25% dmg & rate',
+}
 
 const HIGH_SCORE_KEY = 'rustRushHighScore'
 
@@ -147,18 +237,55 @@ const scalePts = (pts: number[][], s: number) => pts.map(([x, y]) => [x * s, y *
 
 const TANK_HULL = [[15, 0], [7, -11], [-10, -11], [-15, 0], [-10, 11], [7, 11]]
 
+// starPolyPath alternates between two radii — snowflake/spark plates.
+const starPolyPath = (rOuter: number, rInner: number, points: number, rot = 0): Path2D => {
+  const pts: number[][] = []
+  for (let i = 0; i < points * 2; i++) {
+    const r = i % 2 === 0 ? rOuter : rInner
+    const a = rot + (i * Math.PI) / points
+    pts.push([r * Math.cos(a), r * Math.sin(a)])
+  }
+  return polyPath(pts)
+}
+
+// Cross/plus plate (Tesla): arm half-width w, arm length L.
+const crossPts = (L: number, w: number) => [
+  [L, -w], [w, -w], [w, -L], [-w, -L], [-w, -w], [-L, -w],
+  [-L, w], [-w, w], [-w, L], [w, L], [w, w], [L, w],
+]
+
+// Every tower base is a distinct closed silhouette — SHAPE is the
+// discriminator. The ten evolved plates are deliberately louder geometry than
+// the base five: the evolution moment is where the visual payoff lives.
 const SHAPES = {
   towerBase: {
     basic: regularPolyPath(14, 8, Math.PI / 8),
     sniper: polyPath([[0, -15], [15, 0], [0, 15], [-15, 0]]),
     splash: polyPath([[-14, -9], [-9, -14], [9, -14], [14, -9], [14, 9], [9, 14], [-9, 14], [-14, 9]]),
     slow: regularPolyPath(14, 6, -Math.PI / 2),
+    tesla: polyPath(crossPts(15, 6)),
+    // Pulse forks
+    breach: regularPolyPath(15, 5, -Math.PI / 2),                                  // pentagon — forward mass
+    barrage: polyPath([[-15, -10], [15, -10], [10, 12], [-10, 12]]),               // wide battery trapezoid
+    // Railgun forks
+    piercer: polyPath([[17, 0], [9, -8], [-9, -8], [-17, 0], [-9, 8], [9, 8]]),    // elongated lens
+    executioner: regularPolyPath(15, 5, Math.PI / 2),                              // inverted pentagon — the blade
+    // Mortar forks
+    cluster: regularPolyPath(14, 12, Math.PI / 12),                                // round drum
+    siege: polyPath([[-13, -13], [13, -13], [13, 13], [-13, 13]]),                 // square bastion
+    // Stasis forks
+    cryo_field: starPolyPath(15, 8, 6, -Math.PI / 2),                              // snowflake plate
+    deep_freeze: polyPath([[0, -17], [9, -8], [9, 8], [0, 17], [-9, 8], [-9, -8]]), // tall crystal
+    // Tesla forks
+    laser: regularPolyPath(13, 16),                                                // lens ring
+    amplifier: regularPolyPath(15, 3, -Math.PI / 2),                               // broadcast pylon
   } as Record<string, Path2D>,
   towerBaseInset: {
     basic: regularPolyPath(12, 8, Math.PI / 8),
     sniper: polyPath([[0, -13], [13, 0], [0, 13], [-13, 0]]),
     splash: polyPath(scalePts([[-14, -9], [-9, -14], [9, -14], [14, -9], [14, 9], [9, 14], [-9, 14], [-14, 9]], 12 / 14)),
     slow: regularPolyPath(12, 6, -Math.PI / 2),
+    tesla: polyPath(scalePts(crossPts(15, 6), 12 / 15)),
   } as Record<string, Path2D>,
   enemy: {
     basic: polyPath([[10, 0], [-8, -7], [-4, 0], [-8, 7]]),
@@ -242,6 +369,58 @@ const TowerIcon = ({ type, size = 20 }: { type: TowerType, size?: number }) => {
         <polygon points="-1.3,3.9 -7,12.1 -4.6,2.9" fill={c} stroke="none" />
         <polygon points="-4.6,-2.9 -7,-12.1 -1.3,-3.9" fill={c} stroke="none" />
       </>)}
+      {type === 'tesla' && (<>
+        <polygon points="15,-6 6,-6 6,-15 -6,-15 -6,-6 -15,-6 -15,6 -6,6 -6,15 6,15 6,6 15,6" {...common} />
+        <polyline points="-3,-8 3,-2 -2,0 4,8" fill="none" stroke={c} strokeWidth="2" />
+      </>)}
+      {type === 'breach' && (<>
+        <polygon points="0,-15 14.3,-4.6 8.8,12.1 -8.8,12.1 -14.3,-4.6" {...common} />
+        <rect x="2" y="-6" width="13" height="4.5" fill={c} stroke="none" />
+        <rect x="2" y="1.5" width="13" height="4.5" fill={c} stroke="none" />
+      </>)}
+      {type === 'barrage' && (<>
+        <polygon points="-15,-10 15,-10 10,12 -10,12" {...common} />
+        <rect x="3" y="-7" width="12" height="3" fill={c} stroke="none" transform="rotate(-12)" />
+        <rect x="3" y="-1.5" width="12" height="3" fill={c} stroke="none" />
+        <rect x="3" y="4" width="12" height="3" fill={c} stroke="none" transform="rotate(12)" />
+      </>)}
+      {type === 'piercer' && (<>
+        <polygon points="17,0 9,-8 -9,-8 -17,0 -9,8 9,8" {...common} />
+        <rect x="-14" y="-1.25" width="33" height="2.5" fill={c} stroke="none" />
+      </>)}
+      {type === 'executioner' && (<>
+        <polygon points="0,15 -14.3,4.6 -8.8,-12.1 8.8,-12.1 14.3,4.6" {...common} />
+        <rect x="0" y="-2" width="12" height="4" fill={c} stroke="none" />
+        <polygon points="11,-6 19,0 11,6" fill={c} stroke="none" />
+      </>)}
+      {type === 'cluster' && (<>
+        <polygon points="13.5,3.6 9.9,9.9 3.6,13.5 -3.6,13.5 -9.9,9.9 -13.5,3.6 -13.5,-3.6 -9.9,-9.9 -3.6,-13.5 3.6,-13.5 9.9,-9.9 13.5,-3.6" {...common} />
+        <circle cx="6" cy="-4" r="2" fill={c} />
+        <circle cx="8" cy="1" r="2" fill={c} />
+        <circle cx="5" cy="6" r="2" fill={c} />
+      </>)}
+      {type === 'siege' && (<>
+        <rect x="-13" y="-13" width="26" height="26" {...common} />
+        <rect x="0" y="-5.5" width="16" height="11" fill={c} stroke="none" />
+      </>)}
+      {type === 'cryo_field' && (<>
+        <polygon points="0,-15 4,-6.9 13,-7.5 8,0 13,7.5 4,6.9 0,15 -4,6.9 -13,7.5 -8,0 -13,-7.5 -4,-6.9" {...common} />
+        <circle r="3" fill={c} />
+      </>)}
+      {type === 'deep_freeze' && (<>
+        <polygon points="0,-17 9,-8 9,8 0,17 -9,8 -9,-8" {...common} />
+        <polyline points="-4,-8 3,0 -3,8" fill="none" stroke={c} strokeWidth="2" />
+      </>)}
+      {type === 'laser' && (<>
+        <circle r="13" {...common} />
+        <circle r="5" fill="none" stroke={c} strokeWidth="2" />
+        <circle r="1.75" fill={c} />
+      </>)}
+      {type === 'amplifier' && (<>
+        <polygon points="0,-15 13,7.5 -13,7.5" {...common} />
+        <polygon points="0,-8 7,4.5 -7,4.5" fill="none" stroke={c} strokeWidth="1.5" />
+        <circle cy="1" r="2" fill={c} />
+      </>)}
     </svg>
   )
 }
@@ -270,6 +449,7 @@ interface GameCanvasProps {
   onPlaceTower: (x: number, y: number, towerType: string) => void
   onSellTower: (towerId: number) => void
   onUpgradeTower: (towerId: number) => void
+  onEvolveTower: (towerId: number, evolution: string) => void
   onStartWave: () => void
   onNewGame: () => void
   onSpawnEnemy?: () => void
@@ -286,6 +466,7 @@ const GameCanvas = ({
   onPlaceTower,
   onSellTower,
   onUpgradeTower,
+  onEvolveTower,
   onStartWave,
   onNewGame,
   onSpawnEnemy,
@@ -296,7 +477,7 @@ const GameCanvas = ({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationFrameRef = useRef<number>()
   const hoveredCellRef = useRef<Position | null>(null)
-  const selectedTowerTypeRef = useRef<TowerType | null>('basic')
+  const selectedTowerTypeRef = useRef<BaseTowerType | null>('basic')
   const selectedTowerRef = useRef<Tower | null>(null)
   // Canvas-only state: pre-rendered static background and per-entity headings
   // (computed from movement deltas — the server doesn't send facing angles).
@@ -306,8 +487,10 @@ const GameCanvas = ({
   const projHeadingsRef = useRef<Map<number, { x: number; y: number; angle: number }>>(new Map())
 
   const [hoveredCell, setHoveredCell] = useState<Position | null>(null)
-  const [selectedTowerType, setSelectedTowerType] = useState<TowerType | null>('basic')
+  const [selectedTowerType, setSelectedTowerType] = useState<BaseTowerType | null>('basic')
   const [selectedTower, setSelectedTower] = useState<Tower | null>(null)
+  // Evolve flow: which option is pending its irreversible-choice confirmation.
+  const [evolveChoice, setEvolveChoice] = useState<EvolvedTowerType | null>(null)
   const [autoWave, setAutoWave] = useState(false)
   const [countdown, setCountdown] = useState<number | null>(null)
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -315,6 +498,7 @@ const GameCanvas = ({
   const [isNewHighScore, setIsNewHighScore] = useState(false)
   const prevPhaseRef = useRef<string>('waiting')
   const [showGlossary, setShowGlossary] = useState(false)
+  const [glossaryTab, setGlossaryTab] = useState<'towers' | 'enemies'>('towers')
 
   // Sync refs (game state itself arrives via liveStateRef at full rate)
   hoveredCellRef.current = hoveredCell
@@ -381,17 +565,30 @@ const GameCanvas = ({
   }, [phase, gameState?.score, highScore])
 
   // Deselect tower if it no longer exists (was sold or cleared)
-  // Also sync selected tower stats when server broadcasts an update (e.g. after upgrade)
+  // Also sync selected tower stats when server broadcasts an update
+  // (e.g. after upgrade or evolution)
   useEffect(() => {
     if (selectedTower) {
       const updated = gameState?.towers.find(t => t.id === selectedTower.id)
       if (!updated) {
         setSelectedTower(null)
-      } else if (updated.level !== selectedTower.level || updated.damage !== selectedTower.damage) {
+      } else if (
+        updated.level !== selectedTower.level ||
+        updated.damage !== selectedTower.damage ||
+        updated.tower_type !== selectedTower.tower_type ||
+        updated.total_spent !== selectedTower.total_spent
+      ) {
         setSelectedTower(updated)
       }
     }
   }, [gameState?.towers, selectedTower])
+
+  // Any change of selection resets a half-finished evolve confirmation.
+  const selectedTowerId = selectedTower?.id
+  const selectedTowerVariant = selectedTower?.tower_type
+  useEffect(() => {
+    setEvolveChoice(null)
+  }, [selectedTowerId, selectedTowerVariant])
 
   // Animation loop — runs once for the component's lifetime and calls the
   // freshest render closure through a ref, so the effect needs no deps.
@@ -446,11 +643,17 @@ const GameCanvas = ({
     const enemyById = new Map<number, Enemy>()
     currentEnemies.forEach(e => enemyById.set(e.id, e))
 
-    // 3. Range rings + hover underlay go under the entities.
+    // 3. Range rings + always-on aura fields + hover underlay go under the
+    //    entities.
     const liveSel = selTower ? currentTowers.find(tw => tw.id === selTower.id) : undefined
     if (liveSel) {
       drawRangeRing(ctx, liveSel.position, liveSel.range, TOWER_COLORS[liveSel.tower_type], t, 0.7)
     }
+    currentTowers.forEach(tw => {
+      if (tw.tower_type === 'cryo_field' || tw.tower_type === 'amplifier') {
+        drawAuraField(ctx, tw, t)
+      }
+    })
     let hoverBlocked = false
     const hoverPlacing = hovered && !currentIsGameOver && !selTower && selType !== null &&
       !towerByCell.has(`${hovered.x},${hovered.y}`)
@@ -473,7 +676,15 @@ const GameCanvas = ({
     currentEnemies.forEach(enemy => drawEnemy(ctx, enemy, t, nextEnemyHeadings))
     enemyHeadingsRef.current = nextEnemyHeadings
 
-    // 5. Effects.
+    // 5. Effects. Laser beams draw between towers and enemies (both already
+    //    on screen); chain arcs ride the snapshot like explosions do.
+    currentTowers.forEach(tw => {
+      if (tw.tower_type === 'laser' && tw.current_target) {
+        const victim = enemyById.get(tw.current_target)
+        if (victim) drawLaserBeam(ctx, tw, victim, t)
+      }
+    })
+    ;(gs?.arcs || []).forEach(arc => drawArc(ctx, arc, t))
     currentFlashes.forEach(flash => drawMuzzleFlash(ctx, flash, towerByCell))
     currentExplosions.forEach(explosion => drawExplosion(ctx, explosion))
 
@@ -768,6 +979,96 @@ const GameCanvas = ({
     ctx.stroke()
   }
 
+  // Always-on aura field (cryo field, amplifier): faint fill + slow-crawling
+  // dashed rim, quieter than the selection range ring so it reads as ambient.
+  const drawAuraField = (ctx: CanvasRenderingContext2D, tower: Tower, t: number) => {
+    const x = tower.position.x * CELL_SIZE + CELL_SIZE / 2
+    const y = tower.position.y * CELL_SIZE + CELL_SIZE / 2
+    const r = tower.range * CELL_SIZE
+    const accent = TOWER_COLORS[tower.tower_type]
+    ctx.fillStyle = hexAlpha(accent, 0.045)
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = hexAlpha(accent, 0.35)
+    ctx.lineWidth = 1
+    ctx.setLineDash([4, 8])
+    ctx.lineDashOffset = -((t * 8) % 12)
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.lineDashOffset = 0
+  }
+
+  // Laser beam: accent glow + white core from the lens to the target, with an
+  // impact bloom. Drawn from live positions every frame — no wire data.
+  const drawLaserBeam = (ctx: CanvasRenderingContext2D, tower: Tower, victim: Enemy, t: number) => {
+    const x1 = tower.position.x * CELL_SIZE + CELL_SIZE / 2
+    const y1 = tower.position.y * CELL_SIZE + CELL_SIZE / 2
+    const x2 = victim.position.x * CELL_SIZE + CELL_SIZE / 2
+    const y2 = victim.position.y * CELL_SIZE + CELL_SIZE / 2
+    const accent = TOWER_COLORS.laser
+    const pulse = 0.75 + 0.25 * Math.sin(t * 18 + tower.id)
+    ctx.save()
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.strokeStyle = hexAlpha(accent, 0.3 * pulse)
+    ctx.lineWidth = 5
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    ctx.stroke()
+    ctx.strokeStyle = hexAlpha(PALETTE.white, 0.85 * pulse)
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    ctx.stroke()
+    const bloom = 10 + 3 * Math.sin(t * 23)
+    ctx.drawImage(glowSprite(accent), x2 - bloom, y2 - bloom, bloom * 2, bloom * 2)
+    ctx.restore()
+  }
+
+  // Chain-lightning arc: jagged accent bolt + white core between two points.
+  // The jitter re-rolls every frame (seeded by id + time) so it flickers.
+  const drawArc = (ctx: CanvasRenderingContext2D, arc: Arc, t: number) => {
+    const x1 = arc.from.x * CELL_SIZE + CELL_SIZE / 2
+    const y1 = arc.from.y * CELL_SIZE + CELL_SIZE / 2
+    const x2 = arc.to.x * CELL_SIZE + CELL_SIZE / 2
+    const y2 = arc.to.y * CELL_SIZE + CELL_SIZE / 2
+    const alpha = Math.max(0, Math.min(arc.duration / 0.18, 1))
+    const dx = x2 - x1
+    const dy = y2 - y1
+    const len = Math.sqrt(dx * dx + dy * dy) || 1
+    const nx = -dy / len
+    const ny = dx / len
+    const segs = 5
+
+    const bolt = (jitterScale: number) => {
+      ctx.beginPath()
+      ctx.moveTo(x1, y1)
+      for (let i = 1; i < segs; i++) {
+        const f = i / segs
+        const seed = Math.sin(arc.id * 13.7 + i * 71.3 + Math.floor(t * 40) * 5.1)
+        const jitter = seed * jitterScale
+        ctx.lineTo(x1 + dx * f + nx * jitter, y1 + dy * f + ny * jitter)
+      }
+      ctx.lineTo(x2, y2)
+      ctx.stroke()
+    }
+
+    ctx.save()
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.strokeStyle = hexAlpha(TOWER_COLORS.tesla, 0.55 * alpha)
+    ctx.lineWidth = 2.5
+    bolt(6)
+    ctx.strokeStyle = hexAlpha(PALETTE.white, 0.9 * alpha)
+    ctx.lineWidth = 1
+    bolt(6)
+    ctx.restore()
+  }
+
   const drawSelectionBrackets = (ctx: CanvasRenderingContext2D, pos: Position) => {
     const px = pos.x * CELL_SIZE
     const py = pos.y * CELL_SIZE
@@ -838,6 +1139,7 @@ const GameCanvas = ({
     const accent = TOWER_COLORS[type] || TOWER_COLORS.basic
     const light = TOWER_LIGHT[type] || PALETTE.white
     const level = tower.level || 1
+    const evolved = tower.evolved ?? false
     const base = SHAPES.towerBase[type] || SHAPES.towerBase.basic
 
     ctx.save()
@@ -852,15 +1154,16 @@ const GameCanvas = ({
     ctx.strokeStyle = accent
     ctx.lineWidth = 1.5
     ctx.stroke(base)
-    if (level >= 4) {
+    // MAX-level inset ring — base forms only; evolved plates ARE the payoff.
+    if (level >= 4 && !evolved) {
       ctx.strokeStyle = hexAlpha(PALETTE.white, 0.8)
       ctx.lineWidth = 1
       ctx.stroke(SHAPES.towerBaseInset[type] || SHAPES.towerBaseInset.basic)
     }
 
-    // Slow tower ambient ring: dashed crawl (the tower's motion accent).
-    if (type === 'slow') {
-      ctx.strokeStyle = hexAlpha(TOWER_LIGHT.slow, 0.5)
+    // Ambient dashed ring: slow's motion accent, inherited by its evolutions.
+    if (type === 'slow' || type === 'cryo_field' || type === 'deep_freeze') {
+      ctx.strokeStyle = hexAlpha(light, 0.5)
       ctx.lineWidth = 1
       ctx.setLineDash([3, 5])
       ctx.lineDashOffset = -((t * 6) % 8)
@@ -871,85 +1174,259 @@ const GameCanvas = ({
       ctx.lineDashOffset = 0
     }
 
-    // Turret: rotates toward the target and scales up with level.
-    ctx.rotate(tower.rotation || 0)
-    const s = 1 + 0.06 * (level - 1)
-    ctx.scale(s, s)
-    switch (type) {
-      case 'sniper':
-        ctx.fillStyle = accent
-        ctx.fillRect(2, -2.5, 22, 1.5)
-        ctx.fillRect(2, 1, 22, 1.5)
-        ctx.fillRect(22, -3, 2, 6)
-        ctx.strokeStyle = light
-        ctx.lineWidth = 1
-        ctx.beginPath()
-        ctx.moveTo(4, 0)
-        ctx.lineTo(22, 0)
-        ctx.stroke()
-        ctx.fillStyle = accent
-        ctx.beginPath()
-        ctx.arc(0, 0, 3.5, 0, Math.PI * 2)
-        ctx.fill()
-        break
-      case 'splash':
-        ctx.fillStyle = PALETTE.turretMetal
-        ctx.fillRect(0, -5, 12, 10)
-        ctx.strokeStyle = accent
-        ctx.lineWidth = 1.5
-        ctx.strokeRect(0, -5, 12, 10)
-        ctx.fillStyle = PALETTE.bgDeep
-        ctx.beginPath()
-        ctx.arc(12, 0, 2.5, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.strokeStyle = accent
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.arc(0, 0, 6, 0, Math.PI * 2)
-        ctx.stroke()
-        ctx.fillStyle = accent
-        ctx.beginPath()
-        ctx.arc(0, 0, 2, 0, Math.PI * 2)
-        ctx.fill()
-        break
-      case 'slow': {
-        // Three emitter vanes at 120°.
-        ctx.fillStyle = PALETTE.turretMetal
-        ctx.strokeStyle = accent
-        ctx.lineWidth = 1.5
-        for (let i = 0; i < 3; i++) {
-          ctx.save()
-          ctx.rotate((i * 2 * Math.PI) / 3)
-          const vane = polyPath([[6, -3], [15, 0], [6, 3]])
-          ctx.fill(vane)
-          ctx.stroke(vane)
-          ctx.restore()
+    // Aura hardware (cryo field, amplifier) never rotates — no turret pass.
+    const isAuraTower = type === 'cryo_field' || type === 'amplifier'
+
+    if (!isAuraTower) {
+      // Turret: rotates toward the target and scales up with level.
+      ctx.rotate(tower.rotation || 0)
+      const s = evolved ? 1.1 : 1 + 0.06 * (level - 1)
+      ctx.scale(s, s)
+      switch (type) {
+        case 'sniper':
+          ctx.fillStyle = accent
+          ctx.fillRect(2, -2.5, 22, 1.5)
+          ctx.fillRect(2, 1, 22, 1.5)
+          ctx.fillRect(22, -3, 2, 6)
+          ctx.strokeStyle = light
+          ctx.lineWidth = 1
+          ctx.beginPath()
+          ctx.moveTo(4, 0)
+          ctx.lineTo(22, 0)
+          ctx.stroke()
+          ctx.fillStyle = accent
+          ctx.beginPath()
+          ctx.arc(0, 0, 3.5, 0, Math.PI * 2)
+          ctx.fill()
+          break
+        case 'splash':
+          ctx.fillStyle = PALETTE.turretMetal
+          ctx.fillRect(0, -5, 12, 10)
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.5
+          ctx.strokeRect(0, -5, 12, 10)
+          ctx.fillStyle = PALETTE.bgDeep
+          ctx.beginPath()
+          ctx.arc(12, 0, 2.5, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 2
+          ctx.beginPath()
+          ctx.arc(0, 0, 6, 0, Math.PI * 2)
+          ctx.stroke()
+          ctx.fillStyle = accent
+          ctx.beginPath()
+          ctx.arc(0, 0, 2, 0, Math.PI * 2)
+          ctx.fill()
+          break
+        case 'slow': {
+          // Three emitter vanes at 120°.
+          ctx.fillStyle = PALETTE.turretMetal
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.5
+          for (let i = 0; i < 3; i++) {
+            ctx.save()
+            ctx.rotate((i * 2 * Math.PI) / 3)
+            const vane = polyPath([[6, -3], [15, 0], [6, 3]])
+            ctx.fill(vane)
+            ctx.stroke(vane)
+            ctx.restore()
+          }
+          break
         }
-        break
-      }
-      default: { // basic
-        const barrelLen = 13 + level
-        ctx.fillStyle = PALETTE.turretMetal
-        ctx.fillRect(4, -3, barrelLen, 6)
-        ctx.strokeStyle = accent
-        ctx.lineWidth = 1.5
-        ctx.strokeRect(4, -3, barrelLen, 6)
-        ctx.strokeStyle = light
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.moveTo(4 + barrelLen, -3)
-        ctx.lineTo(4 + barrelLen, 3)
-        ctx.stroke()
-        ctx.fillStyle = accent
-        ctx.beginPath()
-        ctx.arc(0, 0, 4.5, 0, Math.PI * 2)
-        ctx.fill()
-        break
+        case 'tesla': {
+          // Twin-prong arc emitter with a flickering spark bridging the gap.
+          ctx.fillStyle = PALETTE.turretMetal
+          ctx.fillRect(2, -4, 7, 8)
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.5
+          ctx.strokeRect(2, -4, 7, 8)
+          ctx.beginPath()
+          ctx.moveTo(9, -3.5)
+          ctx.lineTo(16, -5)
+          ctx.moveTo(9, 3.5)
+          ctx.lineTo(16, 5)
+          ctx.stroke()
+          const flick = Math.sin(t * 31 + tower.id * 7)
+          ctx.strokeStyle = hexAlpha(light, 0.5 + 0.5 * Math.abs(flick))
+          ctx.lineWidth = 1.25
+          ctx.beginPath()
+          ctx.moveTo(15, -4)
+          ctx.lineTo(12.5, flick * 2.5)
+          ctx.lineTo(15, 4)
+          ctx.stroke()
+          ctx.fillStyle = accent
+          ctx.beginPath()
+          ctx.arc(0, 0, 4.5, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.fillStyle = light
+          ctx.beginPath()
+          ctx.arc(0, 0, 1.8, 0, Math.PI * 2)
+          ctx.fill()
+          break
+        }
+        case 'breach': {
+          // Twin heavy short barrels with a muzzle brace.
+          ctx.fillStyle = PALETTE.turretMetal
+          ctx.fillRect(3, -5.5, 12, 4.5)
+          ctx.fillRect(3, 1, 12, 4.5)
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.5
+          ctx.strokeRect(3, -5.5, 12, 4.5)
+          ctx.strokeRect(3, 1, 12, 4.5)
+          ctx.fillStyle = accent
+          ctx.fillRect(14, -6, 2.5, 12)
+          ctx.beginPath()
+          ctx.arc(0, 0, 5, 0, Math.PI * 2)
+          ctx.fill()
+          break
+        }
+        case 'barrage': {
+          // Three fanned launcher tubes.
+          ctx.fillStyle = PALETTE.turretMetal
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.25
+          for (const a of [-0.24, 0, 0.24]) {
+            ctx.save()
+            ctx.rotate(a)
+            ctx.fillRect(4, -1.75, 14, 3.5)
+            ctx.strokeRect(4, -1.75, 14, 3.5)
+            ctx.restore()
+          }
+          ctx.fillStyle = accent
+          ctx.beginPath()
+          ctx.arc(0, 0, 4.5, 0, Math.PI * 2)
+          ctx.fill()
+          break
+        }
+        case 'piercer': {
+          // Extra-long twin rails with an energized core line.
+          ctx.fillStyle = accent
+          ctx.fillRect(2, -3, 28, 1.5)
+          ctx.fillRect(2, 1.5, 28, 1.5)
+          ctx.strokeStyle = light
+          ctx.lineWidth = 1.5
+          ctx.beginPath()
+          ctx.moveTo(2, 0)
+          ctx.lineTo(30, 0)
+          ctx.stroke()
+          ctx.fillStyle = PALETTE.turretMetal
+          ctx.fillRect(-2, -4, 8, 8)
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.5
+          ctx.strokeRect(-2, -4, 8, 8)
+          break
+        }
+        case 'executioner': {
+          // Rail plus a blade at the muzzle.
+          ctx.fillStyle = accent
+          ctx.fillRect(2, -2, 18, 4)
+          const blade = polyPath([[19, -6], [28, 0], [19, 6]])
+          ctx.fillStyle = light
+          ctx.fill(blade)
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.25
+          ctx.stroke(blade)
+          ctx.fillStyle = accent
+          ctx.beginPath()
+          ctx.arc(0, 0, 4, 0, Math.PI * 2)
+          ctx.fill()
+          break
+        }
+        case 'cluster': {
+          // Wide triple-muzzle drum.
+          ctx.fillStyle = PALETTE.turretMetal
+          ctx.fillRect(0, -8, 11, 16)
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.5
+          ctx.strokeRect(0, -8, 11, 16)
+          ctx.fillStyle = PALETTE.bgDeep
+          for (const oy of [-5, 0, 5]) {
+            ctx.beginPath()
+            ctx.arc(11, oy, 2, 0, Math.PI * 2)
+            ctx.fill()
+          }
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 2
+          ctx.beginPath()
+          ctx.arc(0, 0, 5.5, 0, Math.PI * 2)
+          ctx.stroke()
+          break
+        }
+        case 'siege': {
+          // One massive reinforced tube.
+          ctx.fillStyle = PALETTE.turretMetal
+          ctx.fillRect(0, -6.5, 17, 13)
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.75
+          ctx.strokeRect(0, -6.5, 17, 13)
+          ctx.fillStyle = accent
+          ctx.fillRect(5, -7.5, 3, 15)
+          ctx.fillStyle = PALETTE.bgDeep
+          ctx.beginPath()
+          ctx.arc(17, 0, 3.5, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.strokeStyle = light
+          ctx.lineWidth = 1
+          ctx.stroke()
+          break
+        }
+        case 'deep_freeze': {
+          // One large crystal lance plus side shards.
+          const lance = polyPath([[3, -4.5], [19, 0], [3, 4.5], [0, 0]])
+          ctx.fillStyle = light
+          ctx.fill(lance)
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.5
+          ctx.stroke(lance)
+          for (const sy of [-1, 1]) {
+            const shard = polyPath([[2, sy * 5], [9, sy * 9], [5, sy * 4]])
+            ctx.fillStyle = hexAlpha(light, 0.7)
+            ctx.fill(shard)
+          }
+          break
+        }
+        case 'laser': {
+          // Lens housing with a focusing ring — the beam itself is drawn in
+          // the effects pass (drawLaserBeams).
+          ctx.fillStyle = PALETTE.turretMetal
+          ctx.fillRect(-1, -4.5, 11, 9)
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.5
+          ctx.strokeRect(-1, -4.5, 11, 9)
+          ctx.beginPath()
+          ctx.arc(12, 0, 4, 0, Math.PI * 2)
+          ctx.stroke()
+          ctx.fillStyle = light
+          ctx.beginPath()
+          ctx.arc(12, 0, 1.75, 0, Math.PI * 2)
+          ctx.fill()
+          break
+        }
+        default: { // basic
+          const barrelLen = 13 + level
+          ctx.fillStyle = PALETTE.turretMetal
+          ctx.fillRect(4, -3, barrelLen, 6)
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.5
+          ctx.strokeRect(4, -3, barrelLen, 6)
+          ctx.strokeStyle = light
+          ctx.lineWidth = 2
+          ctx.beginPath()
+          ctx.moveTo(4 + barrelLen, -3)
+          ctx.lineTo(4 + barrelLen, 3)
+          ctx.stroke()
+          ctx.fillStyle = accent
+          ctx.beginPath()
+          ctx.arc(0, 0, 4.5, 0, Math.PI * 2)
+          ctx.fill()
+          break
+        }
       }
     }
     ctx.restore()
 
-    // Slow tower static snowflake overlay (screen frame, not rotated).
+    // Static screen-frame toppers (never rotate with the turret).
     if (type === 'slow') {
       ctx.strokeStyle = TOWER_LIGHT.slow
       ctx.lineWidth = 1.5
@@ -965,16 +1442,82 @@ const GameCanvas = ({
       ctx.arc(x, y, 2.5, 0, Math.PI * 2)
       ctx.fill()
     }
+    if (type === 'cryo_field') {
+      // Bigger, slowly-rotating snowflake core.
+      ctx.save()
+      ctx.translate(x, y)
+      ctx.rotate(t * 0.35)
+      ctx.strokeStyle = light
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      for (let i = 0; i < 6; i++) {
+        const a = (i * Math.PI) / 3
+        ctx.moveTo(2 * Math.cos(a), 2 * Math.sin(a))
+        ctx.lineTo(10 * Math.cos(a), 10 * Math.sin(a))
+        // Side barbs
+        ctx.moveTo(6 * Math.cos(a), 6 * Math.sin(a))
+        ctx.lineTo(6 * Math.cos(a) + 3 * Math.cos(a + 1.1), 6 * Math.sin(a) + 3 * Math.sin(a + 1.1))
+        ctx.moveTo(6 * Math.cos(a), 6 * Math.sin(a))
+        ctx.lineTo(6 * Math.cos(a) + 3 * Math.cos(a - 1.1), 6 * Math.sin(a) + 3 * Math.sin(a - 1.1))
+      }
+      ctx.stroke()
+      ctx.fillStyle = light
+      ctx.beginPath()
+      ctx.arc(0, 0, 2.5, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.restore()
+    }
+    if (type === 'amplifier') {
+      // Counter-rotating emitter triangle + pulsing core.
+      ctx.save()
+      ctx.translate(x, y)
+      ctx.rotate(-t * 0.6)
+      ctx.strokeStyle = hexAlpha(accent, 0.9)
+      ctx.lineWidth = 1.5
+      ctx.stroke(regularPolyPath(8, 3, -Math.PI / 2))
+      ctx.restore()
+      ctx.save()
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.globalAlpha = 0.6 + 0.4 * Math.sin(t * 2.5 + tower.id)
+      ctx.drawImage(glowSprite(accent), x - 8, y - 8, 16, 16)
+      ctx.restore()
+      ctx.fillStyle = light
+      ctx.beginPath()
+      ctx.arc(x, y, 2.25, 0, Math.PI * 2)
+      ctx.fill()
+    }
 
-    // Upgrade pips: 4 outlined slots, first `level` filled (screen frame).
-    ctx.strokeStyle = hexAlpha(accent, 0.2)
-    ctx.fillStyle = accent
-    ctx.lineWidth = 1
-    for (let i = 0; i < 4; i++) {
-      const px = Math.round(x - 12 + i * 8) - 2
-      const py = Math.round(y + 17) - 2
-      if (i < level) ctx.fillRect(px, py, 4, 4)
-      else ctx.strokeRect(px + 0.5, py + 0.5, 3, 3)
+    if (evolved) {
+      // Evolved marker: one filled diamond flanked by ticks — replaces the
+      // 4-pip level row entirely.
+      ctx.fillStyle = accent
+      ctx.strokeStyle = hexAlpha(accent, 0.55)
+      ctx.lineWidth = 1
+      const py = Math.round(y + 19)
+      ctx.beginPath()
+      ctx.moveTo(x, py - 3.5)
+      ctx.lineTo(x + 3.5, py)
+      ctx.lineTo(x, py + 3.5)
+      ctx.lineTo(x - 3.5, py)
+      ctx.closePath()
+      ctx.fill()
+      ctx.beginPath()
+      ctx.moveTo(x - 11, py)
+      ctx.lineTo(x - 6, py)
+      ctx.moveTo(x + 6, py)
+      ctx.lineTo(x + 11, py)
+      ctx.stroke()
+    } else {
+      // Upgrade pips: 4 outlined slots, first `level` filled (screen frame).
+      ctx.strokeStyle = hexAlpha(accent, 0.2)
+      ctx.fillStyle = accent
+      ctx.lineWidth = 1
+      for (let i = 0; i < 4; i++) {
+        const px = Math.round(x - 12 + i * 8) - 2
+        const py = Math.round(y + 17) - 2
+        if (i < level) ctx.fillRect(px, py, 4, 4)
+        else ctx.strokeRect(px + 0.5, py + 0.5, 3, 3)
+      }
     }
   }
 
@@ -987,7 +1530,8 @@ const GameCanvas = ({
     const accent = ENEMY_COLORS[type] || ENEMY_COLORS.basic
     const body = ENEMY_BODY[type] || ENEMY_BODY.basic
     const R = ENEMY_RADIUS[type] ?? 10
-    const isSlowed = (enemy.slow_duration ?? 0) > 0
+    const isRooted = (enemy.root_duration ?? 0) > 0
+    const isSlowed = (enemy.slow_duration ?? 0) > 0 && !isRooted
 
     // Heading: smoothed toward the movement direction.
     const prev = enemyHeadingsRef.current.get(enemy.id)
@@ -1076,6 +1620,40 @@ const GameCanvas = ({
       }
     }
 
+    // Deep-freeze root: solid ice block — unmistakably harder than the cage.
+    if (isRooted) {
+      ctx.save()
+      ctx.translate(x, y)
+      const block = regularPolyPath(R + 6, 6, -Math.PI / 2)
+      ctx.fillStyle = 'rgba(159, 194, 255, 0.28)'
+      ctx.fill(block)
+      ctx.strokeStyle = TOWER_LIGHT.deep_freeze
+      ctx.lineWidth = 2
+      ctx.stroke(block)
+      // Frost spikes at the vertices.
+      ctx.fillStyle = TOWER_LIGHT.deep_freeze
+      for (let i = 0; i < 6; i++) {
+        const a = -Math.PI / 2 + (i * Math.PI) / 3
+        const bx = (R + 6) * Math.cos(a)
+        const by = (R + 6) * Math.sin(a)
+        const spike = polyPath([
+          [bx, by],
+          [bx + 4 * Math.cos(a - 0.35), by + 4 * Math.sin(a - 0.35)],
+          [bx + 6 * Math.cos(a), by + 6 * Math.sin(a)],
+          [bx + 4 * Math.cos(a + 0.35), by + 4 * Math.sin(a + 0.35)],
+        ])
+        ctx.fill(spike)
+      }
+      // Inner glint.
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(-R * 0.5, -R * 0.6)
+      ctx.lineTo(R * 0.3, R * 0.5)
+      ctx.stroke()
+      ctx.restore()
+    }
+
     // Stasis cage: shape-based debuff tell — the body is never recolored.
     if (isSlowed) {
       ctx.save()
@@ -1156,28 +1734,62 @@ const GameCanvas = ({
       next.set(projectile.id, { x, y, angle })
     }
 
+    // Visual family per firing type — evolved forms keep their parent's
+    // projectile language, tinted with their own accent.
+    const accent = TOWER_COLORS[type] || TOWER_COLORS.basic
+    const light = TOWER_LIGHT[type] || PALETTE.white
+
     ctx.save()
     ctx.translate(x, y)
     ctx.rotate(angle)
     switch (type) {
       case 'sniper':
-        ctx.strokeStyle = TOWER_COLORS.sniper
+      case 'executioner': {
+        ctx.strokeStyle = accent
         ctx.lineWidth = 2
         ctx.lineCap = 'round'
         ctx.beginPath()
         ctx.moveTo(-18, 0)
         ctx.lineTo(0, 0)
         ctx.stroke()
-        ctx.drawImage(glowSprite(TOWER_COLORS.sniper), -8, -8, 16, 16)
+        ctx.drawImage(glowSprite(accent), -8, -8, 16, 16)
         ctx.fillStyle = PALETTE.white
         ctx.beginPath()
         ctx.arc(0, 0, 2.5, 0, Math.PI * 2)
         ctx.fill()
+        if (type === 'executioner') {
+          // Blade tip on the execute round.
+          const tip = polyPath([[2, -3], [7, 0], [2, 3]])
+          ctx.fillStyle = light
+          ctx.fill(tip)
+        }
         break
+      }
+      case 'piercer': {
+        // A lance, not a dot: long white-hot rail segment.
+        ctx.strokeStyle = hexAlpha(accent, 0.55)
+        ctx.lineWidth = 4
+        ctx.lineCap = 'round'
+        ctx.beginPath()
+        ctx.moveTo(-24, 0)
+        ctx.lineTo(4, 0)
+        ctx.stroke()
+        ctx.strokeStyle = PALETTE.white
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        ctx.moveTo(-24, 0)
+        ctx.lineTo(6, 0)
+        ctx.stroke()
+        ctx.drawImage(glowSprite(accent), -8, -8, 16, 16)
+        break
+      }
       case 'splash':
-        ctx.drawImage(glowSprite(TOWER_COLORS.splash), -14, -14, 28, 28)
+      case 'cluster':
+      case 'siege': {
+        const shellR = type === 'siege' ? 5.5 : 4.5
+        ctx.drawImage(glowSprite(accent), -14, -14, 28, 28)
         ctx.globalAlpha = 0.35
-        ctx.fillStyle = TOWER_COLORS.splash
+        ctx.fillStyle = accent
         ctx.beginPath()
         ctx.arc(-6, 0, 3, 0, Math.PI * 2)
         ctx.fill()
@@ -1186,28 +1798,80 @@ const GameCanvas = ({
         ctx.arc(-12, 0, 2, 0, Math.PI * 2)
         ctx.fill()
         ctx.globalAlpha = 1
-        ctx.fillStyle = TOWER_COLORS.splash
+        ctx.fillStyle = accent
         ctx.beginPath()
-        ctx.arc(0, 0, 4.5, 0, Math.PI * 2)
+        ctx.arc(0, 0, shellR, 0, Math.PI * 2)
         ctx.fill()
-        ctx.strokeStyle = TOWER_LIGHT.splash
+        ctx.strokeStyle = light
         ctx.lineWidth = 1
         ctx.stroke()
         break
-      case 'slow': {
-        ctx.strokeStyle = hexAlpha(TOWER_COLORS.slow, 0.5)
+      }
+      case 'slow':
+      case 'deep_freeze': {
+        const s = type === 'deep_freeze' ? 1.5 : 1
+        ctx.strokeStyle = hexAlpha(accent, 0.5)
         ctx.lineWidth = 1.5
         ctx.beginPath()
-        ctx.moveTo(-10, 0)
-        ctx.lineTo(-3, 0)
+        ctx.moveTo(-10 * s, 0)
+        ctx.lineTo(-3 * s, 0)
         ctx.stroke()
         ctx.rotate(t * 12 + projectile.id)
-        const shard = polyPath([[5, 0], [0, -3], [-5, 0], [0, 3]])
-        ctx.fillStyle = TOWER_LIGHT.slow
+        const shard = polyPath([[5 * s, 0], [0, -3 * s], [-5 * s, 0], [0, 3 * s]])
+        ctx.fillStyle = light
         ctx.fill(shard)
-        ctx.strokeStyle = TOWER_COLORS.slow
+        ctx.strokeStyle = accent
         ctx.lineWidth = 1
         ctx.stroke(shard)
+        break
+      }
+      case 'tesla': {
+        // Spark bolt: flickering star + short crackle tail.
+        const flick = Math.sin(t * 40 + projectile.id * 3)
+        ctx.strokeStyle = hexAlpha(accent, 0.6)
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        ctx.moveTo(-12, 0)
+        ctx.lineTo(-7, flick * 2)
+        ctx.lineTo(-3, 0)
+        ctx.stroke()
+        ctx.drawImage(glowSprite(accent), -10, -10, 20, 20)
+        ctx.save()
+        ctx.rotate(t * 10 + projectile.id)
+        const spark = polyPath([[5, 0], [1.5, -1.5], [0, -5], [-1.5, -1.5], [-5, 0], [-1.5, 1.5], [0, 5], [1.5, 1.5]])
+        ctx.fillStyle = PALETTE.white
+        ctx.fill(spark)
+        ctx.strokeStyle = accent
+        ctx.lineWidth = 1
+        ctx.stroke(spark)
+        ctx.restore()
+        break
+      }
+      case 'breach': {
+        // Heavier tracer than pulse.
+        ctx.strokeStyle = hexAlpha(accent, 0.8)
+        ctx.lineWidth = 3.5
+        ctx.lineCap = 'round'
+        ctx.beginPath()
+        ctx.moveTo(-11, 0)
+        ctx.lineTo(-2, 0)
+        ctx.stroke()
+        ctx.drawImage(glowSprite(accent), -12, -12, 24, 24)
+        ctx.fillStyle = PALETTE.white
+        ctx.beginPath()
+        ctx.arc(0, 0, 3.5, 0, Math.PI * 2)
+        ctx.fill()
+        break
+      }
+      case 'barrage': {
+        // Small dart — three of these fly per volley.
+        const dart = polyPath([[5, 0], [-4, -2.5], [-4, 2.5]])
+        ctx.fillStyle = accent
+        ctx.fill(dart)
+        ctx.strokeStyle = light
+        ctx.lineWidth = 1
+        ctx.stroke(dart)
+        ctx.drawImage(glowSprite(accent), -8, -8, 16, 16)
         break
       }
       default: // basic
@@ -1228,7 +1892,11 @@ const GameCanvas = ({
     ctx.restore()
   }
 
-  const MUZZLE_OFFSET: Record<string, number> = { basic: 18, sniper: 24, splash: 12, slow: 15 }
+  const MUZZLE_OFFSET: Record<string, number> = {
+    basic: 18, sniper: 24, splash: 12, slow: 15, tesla: 16,
+    breach: 17, barrage: 18, piercer: 30, executioner: 28,
+    cluster: 12, siege: 18, deep_freeze: 19,
+  }
 
   const drawMuzzleFlash = (ctx: CanvasRenderingContext2D, flash: MuzzleFlash, towerByCell: Map<string, Tower>) => {
     const i = Math.max(0, Math.min(flash.duration / 0.1, 1))
@@ -1421,14 +2089,20 @@ const GameCanvas = ({
     return <span style={{ color: PALETTE.hpHigh }}>WAVE {gameState?.wave} — READY</span>
   }
 
-  const towerButtons: TowerType[] = ['basic', 'sniper', 'splash', 'slow']
+  const towerButtons: BaseTowerType[] = ['basic', 'sniper', 'splash', 'slow', 'tesla']
 
+  const isEvolved = selectedTower?.evolved ?? false
   const sellPrice = selectedTower
-    ? Math.floor((selectedTower.total_spent ?? TOWER_COSTS[selectedTower.tower_type as TowerType]) * 0.7)
+    ? Math.floor((selectedTower.total_spent ?? TOWER_COSTS[selectedTower.tower_type as BaseTowerType] ?? 0) * 0.7)
     : 0
-  const upgradeCost = selectedTower ? TOWER_COSTS[selectedTower.tower_type as TowerType] : 0
+  const upgradeCost = selectedTower && !isEvolved ? TOWER_COSTS[selectedTower.tower_type as BaseTowerType] : 0
   const canAffordUpgrade = selectedTower ? gold >= upgradeCost : false
   const isMaxLevel = selectedTower ? (selectedTower.level ?? 1) >= 4 : false
+  // Evolution: 2× everything spent so far, added to total_spent on commit.
+  const evolveCost = (selectedTower?.total_spent ?? 0) * 2
+  const evolveOptions = selectedTower && !isEvolved && isMaxLevel
+    ? EVOLUTION_OPTIONS[selectedTower.tower_type as BaseTowerType] ?? null
+    : null
 
   return (
     <div className="game-canvas-container">
@@ -1509,29 +2183,97 @@ const GameCanvas = ({
 
       {selectedTower && (
         <div className="selected-panel panel" style={{ '--accent': TOWER_COLORS[selectedTower.tower_type] } as React.CSSProperties}>
-          <div className="selected-name">
-            <TowerIcon type={selectedTower.tower_type as TowerType} size={24} />
-            <span>
-              {TOWER_NAMES[selectedTower.tower_type]} <span className="selected-level">MK{selectedTower.level ?? 1}{isMaxLevel ? ' ★MAX' : ''}</span>
-            </span>
+          <div className="selected-main">
+            <div className="selected-name">
+              <TowerIcon type={selectedTower.tower_type as TowerType} size={24} />
+              <span>
+                {TOWER_NAMES[selectedTower.tower_type]}{' '}
+                {isEvolved ? (
+                  <span className="evolved-badge">◆ EVOLVED</span>
+                ) : (
+                  <span className="selected-level">MK{selectedTower.level ?? 1}{isMaxLevel ? ' ★MAX' : ''}</span>
+                )}
+              </span>
+            </div>
+            {selectedTower.tower_type === 'cryo_field' || selectedTower.tower_type === 'amplifier' ? (
+              <>
+                <div className="selected-stat"><span className="label">Radius</span><span className="value">{selectedTower.range}</span></div>
+                <div className="selected-stat"><span className="label">Effect</span><span className="value">
+                  {selectedTower.tower_type === 'cryo_field' ? 'Slow 40%' : '+25% dmg·rate'}
+                </span></div>
+              </>
+            ) : (
+              <>
+                <div className="selected-stat"><span className="label">Range</span><span className="value">{selectedTower.range}</span></div>
+                <div className="selected-stat"><span className="label">{selectedTower.tower_type === 'laser' ? 'Dmg/s' : 'Damage'}</span><span className="value">{selectedTower.damage}</span></div>
+                {selectedTower.tower_type !== 'laser' && (
+                  <div className="selected-stat"><span className="label">Rate</span><span className="value">{selectedTower.fire_rate}/s</span></div>
+                )}
+                {(selectedTower.chain_count ?? 0) > 0 && (
+                  <div className="selected-stat"><span className="label">Chains</span><span className="value">×{selectedTower.chain_count}</span></div>
+                )}
+              </>
+            )}
+            <button onClick={handleSellSelected} className="btn btn-danger">SELL ${sellPrice}</button>
+            {!isEvolved && !isMaxLevel && (
+              <button
+                onClick={handleUpgradeSelected}
+                disabled={!canAffordUpgrade}
+                className="btn btn-gold"
+                title={canAffordUpgrade ? `Upgrade to MK${(selectedTower.level ?? 1) + 1}` : `Need $${upgradeCost} to upgrade`}
+              >
+                UPGRADE ${upgradeCost}
+              </button>
+            )}
+            <button onClick={() => setSelectedTower(null)} className="btn btn-close">✕</button>
           </div>
-          <div className="selected-stat"><span className="label">Range</span><span className="value">{selectedTower.range}</span></div>
-          <div className="selected-stat"><span className="label">Damage</span><span className="value">{selectedTower.damage}</span></div>
-          <div className="selected-stat"><span className="label">Rate</span><span className="value">{selectedTower.fire_rate}/s</span></div>
-          <button onClick={handleSellSelected} className="btn btn-danger">SELL ${sellPrice}</button>
-          {isMaxLevel ? (
-            <span className="max-badge">★ MAX</span>
-          ) : (
-            <button
-              onClick={handleUpgradeSelected}
-              disabled={!canAffordUpgrade}
-              className="btn btn-gold"
-              title={canAffordUpgrade ? `Upgrade to MK${(selectedTower.level ?? 1) + 1}` : `Need $${upgradeCost} to upgrade`}
-            >
-              UPGRADE ${upgradeCost}
-            </button>
+
+          {evolveOptions && !evolveChoice && (
+            <div className="evolve-row">
+              <div className="evolve-title">EVOLVE <span className="evolve-warn">— permanent, pick one</span></div>
+              <div className="evolve-options">
+                {evolveOptions.map(evo => (
+                  <button
+                    key={evo}
+                    className="evolve-option"
+                    style={{ '--accent': TOWER_COLORS[evo] } as React.CSSProperties}
+                    onClick={() => setEvolveChoice(evo)}
+                    title={`${TOWER_NAMES[evo]} — $${evolveCost}`}
+                  >
+                    <TowerIcon type={evo} size={30} />
+                    <span className="evolve-option-body">
+                      <span className="evolve-option-name" style={{ color: TOWER_COLORS[evo] }}>{TOWER_NAMES[evo]}</span>
+                      <span className="evolve-option-desc">{TOWER_DESCRIPTIONS[evo]}</span>
+                    </span>
+                    <span className="cost" style={{ color: gold >= evolveCost ? PALETTE.gold : PALETTE.danger }}>${evolveCost}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
-          <button onClick={() => setSelectedTower(null)} className="btn btn-close">✕</button>
+
+          {evolveOptions && evolveChoice && (
+            <div className="evolve-confirm" style={{ '--accent': TOWER_COLORS[evolveChoice] } as React.CSSProperties}>
+              <TowerIcon type={evolveChoice} size={30} />
+              <span className="evolve-confirm-text">
+                Evolve into <strong style={{ color: TOWER_COLORS[evolveChoice] }}>{TOWER_NAMES[evolveChoice]}</strong> for{' '}
+                <strong className="gold-text">${evolveCost}</strong>?
+                <span className="evolve-warn"> Permanent — cannot be undone, upgraded, or re-evolved.</span>
+              </span>
+              <button
+                className="btn btn-gold"
+                disabled={gold < evolveCost}
+                title={gold >= evolveCost ? 'Commit — this cannot be undone' : `Need $${evolveCost}`}
+                onClick={() => {
+                  onEvolveTower(selectedTower.id, evolveChoice)
+                  setEvolveChoice(null)
+                }}
+              >
+                CONFIRM ▸
+              </button>
+              <button className="btn" onClick={() => setEvolveChoice(null)}>CANCEL</button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1591,39 +2333,95 @@ const GameCanvas = ({
 
       {showGlossary && (
         <div className="glossary panel">
-          <div className="glossary-title">HOSTILE REGISTRY</div>
-          <table>
-            <thead>
-              <tr>
-                <th>Unit</th>
-                <th>HP</th>
-                <th>Speed</th>
-                <th>Gold</th>
-                <th>Score</th>
-                <th>Appears</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ENEMY_GLOSSARY.map(enemy => (
-                <tr key={enemy.type}>
-                  <td>
-                    <span className="glossary-unit">
-                      <EnemyGlyph type={enemy.type} size={18} />
-                      <strong>{enemy.name}</strong>
-                    </span>
-                  </td>
-                  <td>{enemy.health}</td>
-                  <td>{enemy.speed}</td>
-                  <td className="gold-text">+{enemy.gold}</td>
-                  <td className="gold-text">{enemy.score}×wave</td>
-                  <td>{enemy.appears}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="glossary-note">
-            HP and speed scale up past wave 5. A boss appears every wave from 11 — another joins every 3rd wave (max 6).
+          <div className="glossary-tabs">
+            <button
+              className={`glossary-tab ${glossaryTab === 'towers' ? 'active' : ''}`}
+              onClick={() => setGlossaryTab('towers')}
+            >
+              TOWER REGISTRY
+            </button>
+            <button
+              className={`glossary-tab ${glossaryTab === 'enemies' ? 'active' : ''}`}
+              onClick={() => setGlossaryTab('enemies')}
+            >
+              HOSTILE REGISTRY
+            </button>
           </div>
+
+          {glossaryTab === 'enemies' ? (
+            <>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Unit</th>
+                    <th>HP</th>
+                    <th>Speed</th>
+                    <th>Gold</th>
+                    <th>Score</th>
+                    <th>Appears</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ENEMY_GLOSSARY.map(enemy => (
+                    <tr key={enemy.type}>
+                      <td>
+                        <span className="glossary-unit">
+                          <EnemyGlyph type={enemy.type} size={18} />
+                          <strong>{enemy.name}</strong>
+                        </span>
+                      </td>
+                      <td>{enemy.health}</td>
+                      <td>{enemy.speed}</td>
+                      <td className="gold-text">+{enemy.gold}</td>
+                      <td className="gold-text">{enemy.score}×wave</td>
+                      <td>{enemy.appears}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="glossary-note">
+                HP and speed scale up past wave 5. A boss appears every wave from 11 — another joins every 3rd wave (max 6).
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="glossary-towers">
+                {TOWER_GLOSSARY.map(tw => (
+                  <div key={tw.type} className="glossary-tower">
+                    <div className="glossary-tower-head">
+                      <span className="glossary-unit">
+                        <TowerIcon type={tw.type} size={20} />
+                        <strong style={{ color: TOWER_COLORS[tw.type] }}>{TOWER_NAMES[tw.type]}</strong>
+                      </span>
+                      <span className="gold-text">${TOWER_COSTS[tw.type]}</span>
+                      <span>{tw.damage} dmg</span>
+                      <span>{TOWER_RANGES[tw.type]} rng</span>
+                      <span>{tw.rate}/s</span>
+                    </div>
+                    <div className="glossary-tower-note">
+                      {TOWER_DESCRIPTIONS[tw.type]} {tw.upgradeNote}.
+                    </div>
+                    <div className="glossary-evos">
+                      {EVOLUTION_OPTIONS[tw.type].map(evo => (
+                        <div key={evo} className="glossary-evo">
+                          <span className="glossary-unit">
+                            <TowerIcon type={evo} size={17} />
+                            <strong style={{ color: TOWER_COLORS[evo] }}>{TOWER_NAMES[evo]}</strong>
+                          </span>
+                          <span className="glossary-evo-stats">{EVO_STATS[evo]}</span>
+                          <span className="glossary-evo-desc">{TOWER_DESCRIPTIONS[evo]}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="glossary-note">
+                Evolutions unlock at MK4 and cost 2× everything spent on the tower so far
+                (the cost adds to its value — selling still refunds 70% of the total). Permanent: no undo, no further upgrades.
+              </div>
+            </>
+          )}
         </div>
       )}
 

@@ -163,12 +163,15 @@
 
 ## 📋 Planned Features
 
-### Phase 17: Special Towers
-- [ ] Freeze tower (slows enemies)
-- [ ] Tesla tower (chain lightning)
-- [ ] Mortar tower (long range AOE)
-- [ ] Laser tower (continuous beam)
-- [ ] Support tower (buff nearby towers)
+### Phase 17: Tesla + Tower Evolution System ✅ **NEW!** (July 13 — superseded the original "5 new towers" plan per the Tower Evolution design doc)
+- [x] Tesla base tower ($150, chain lightning; upgrades grow the chain: 2×/1.5u → 5×/2.1u)
+- [x] Evolution mechanic: any MAX tower → one of two permanent terminal forms, cost 2× total_spent (added to total_spent so sell math is unchanged)
+- [x] All 10 evolved forms: Breach/Barrage, Piercer/Executioner, Cluster/Siege, Cryo Field/Deep Freeze, Laser/Amplifier
+- [x] New mechanics: multi-shot volley, piercing line shot, execute threshold, slow aura, root, continuous beam, damage/rate buff aura
+- [x] Evolve UI with both options shown + confirmation step (first irreversible action in the game)
+- [x] 10 distinct evolved silhouettes + arcs/beam/aura/root visuals (NEON IRONLINE style)
+- [x] Tower glossary — Tower/Hostile Registry tabs, all stats + evolution paths
+- [ ] Evolution cost balance review (2× multiplier is a first-draft number — Jaime's call)
 
 ### Phase 18: Sound & Music
 - [ ] Background music
@@ -216,6 +219,7 @@
 - [ ] Save/load game state
 
 ### Phase 24: Advanced Features
+- [ ] 4-5 built-in map layouts with a map select screen (distinct from map editor/custom maps below — hand-designed/Fable-built, not user-created)
 - [ ] Map editor
 - [ ] Custom maps
 - [ ] Different game modes (endless, timed)
@@ -488,5 +492,41 @@
 
 ---
 
-**Last Updated**: July 3, 2026
-**Status**: Phase 16 Complete ✅ + quality pass + visual overhaul 🎨 | Next: sound, special towers, deployment (Phases 17+) 🚧
+## 🎉 Recent Achievements (July 13, 2026)
+
+### Phase 17 — Tesla + Tower Evolution System
+
+1. **Tesla tower** — fifth base tower ($150): chain lightning arcs from the
+   primary target to nearby enemies at 50% damage. Upgrades grow the chain
+   itself (2 arcs/1.5u at MK1 → 5 arcs/2.1u at MK4) on top of the standard
+   damage/range curve, so upgrading buys Tesla's multi-target identity.
+2. **Evolution mechanic** — every MAX (MK4) tower can permanently evolve into
+   one of two terminal forms for 2× its `total_spent`; the cost is added to
+   `total_spent`, so the 70% sell refund needed zero special-casing. Both
+   options shown before committing, with a confirmation step (the game's first
+   irreversible action). Evolved towers can't upgrade, re-evolve, or revert.
+3. **10 terminal forms** — Breach/Barrage (Pulse), Piercer/Executioner
+   (Railgun), Cluster/Siege (Mortar), Cryo Field/Deep Freeze (Stasis),
+   Laser/Amplifier (Tesla). Seven brand-new mechanics: multi-target volley,
+   piercing line shots, execute thresholds, a continuous slow aura, roots,
+   a no-projectile beam, and a tower-buffing aura.
+4. **Visuals** — 10 fully distinct evolved silhouettes (shape is the
+   discriminator), plus lightning arcs, laser beam, aura fields, ice-block
+   root, per-family projectiles, and an evolved marker replacing level pips.
+5. **Tower glossary** — the glossary panel now has Tower Registry / Hostile
+   Registry tabs; the tower tab lists all 5 base towers (stats + upgrade
+   notes) and all 10 evolutions (stat lines + descriptions + cost formula).
+6. **Verified** — 14 new Go tests (40 total, all green), tsc/eslint/build
+   clean, and Playwright-driven browser playtest covering every evolution
+   path through the real UI, with screenshot review of silhouettes, arcs,
+   beam, auras, cages, and roots.
+
+⚠️ **Flagged for Jaime**: evolution costs (the 2× multiplier, especially
+Tesla's $1,200) are design-doc first drafts. Income modeling says Tesla's
+evolution lands around wave 14–18 in a normal run — attainable, but expect
+only 1–2 evolutions per run by wave 20. See SESSION-LOG.md for the numbers.
+
+---
+
+**Last Updated**: July 13, 2026
+**Status**: Phase 17 Complete ✅ (Tesla + Tower Evolution + tower glossary) | Next: sound, deployment, difficulty retune (Phases 18+) 🚧
