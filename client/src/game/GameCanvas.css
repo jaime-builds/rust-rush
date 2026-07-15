@@ -623,3 +623,102 @@
 .game-over-best.new-best {
   color: var(--gold);
 }
+
+.game-over-box .btn + .btn {
+  margin-left: 10px;
+}
+
+/* ——— map select ——— */
+
+.map-select-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 4, 10, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 11; /* above the game-over overlay */
+}
+
+.map-select-box {
+  padding: 26px 30px;
+  text-align: center;
+  max-width: 640px;
+}
+
+.map-select-title {
+  color: var(--cyan);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.25em;
+  text-shadow: 0 0 14px rgba(0, 229, 255, 0.4);
+  margin-bottom: 18px;
+}
+
+.map-select-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.map-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.map-card:hover {
+  border-color: var(--cyan);
+  background: rgba(0, 229, 255, 0.06);
+}
+
+.map-card.selected {
+  border-color: var(--cyan);
+  background: rgba(0, 229, 255, 0.1);
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.25) inset;
+}
+
+.map-thumb {
+  width: 100%;
+  display: block;
+  border: 1px solid var(--line);
+}
+
+.map-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.map-card-current {
+  color: var(--cyan);
+  font-size: 10px;
+}
+
+.map-card-tag {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 1.3;
+}
+
+.map-select-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.map-select-warn {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-style: italic;
+  margin: 12px 0 0;
+}

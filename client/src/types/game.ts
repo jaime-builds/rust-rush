@@ -118,6 +118,8 @@ export interface GameState {
   // Static map walls (server-authoritative): enemies path around them,
   // towers cannot be built on them.
   obstacles?: Position[]
+  // The room's current map (see GAME_MAPS / server MapRegistry).
+  map_id?: string
   wave_preview?: WavePreviewEntry[]
 }
 
@@ -140,3 +142,52 @@ export const EVOLUTION_OPTIONS: Record<BaseTowerType, [EvolvedTowerType, Evolved
 }
 
 export const isEvolvedType = (t: TowerType): t is EvolvedTowerType => !(t in TOWER_COSTS)
+
+// --- Map roster ------------------------------------------------------------
+// Mirrored from server MapRegistry (map.go) — kept in sync by hand, same as
+// TOWER_COSTS. The obstacle lists here are ONLY for the map-select previews;
+// in-game rendering always uses the server's obstacles from the snapshot.
+
+export interface GameMapInfo {
+  id: string
+  name: string
+  tagline: string
+  obstacles: Position[]
+}
+
+const vwall = (x: number, y0: number, y1: number): Position[] =>
+  Array.from({ length: y1 - y0 + 1 }, (_, i) => ({ x, y: y0 + i }))
+const hwall = (y: number, x0: number, x1: number): Position[] =>
+  Array.from({ length: x1 - x0 + 1 }, (_, i) => ({ x: x0 + i, y }))
+const block = (x0: number, y0: number, x1: number, y1: number): Position[] => {
+  const cells: Position[] = []
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) cells.push({ x, y })
+  return cells
+}
+
+export const GAME_MAPS: GameMapInfo[] = [
+  { id: 'open', name: 'THE CLEARWAY', tagline: 'No cover. No excuses.', obstacles: [] },
+  {
+    id: 'switchback', name: 'THE SWITCHBACK', tagline: 'Three bulkheads, one long S-route.',
+    obstacles: [...vwall(4, 0, 10), ...vwall(9, 4, 14), ...vwall(15, 0, 10)],
+  },
+  {
+    id: 'gauntlet', name: 'THE GAUNTLET', tagline: 'One straight canyon. Line the walls.',
+    obstacles: [...hwall(5, 3, 16), ...hwall(9, 3, 16)],
+  },
+  {
+    id: 'crucible', name: 'THE CRUCIBLE', tagline: 'A central island. Flip the flow around it.',
+    obstacles: block(8, 5, 11, 9),
+  },
+  {
+    id: 'needle', name: 'THE NEEDLE', tagline: 'Every hostile files through one cell.',
+    obstacles: [...vwall(10, 0, 6), ...vwall(10, 8, 14)],
+  },
+  {
+    id: 'pylons', name: 'THE PYLON FIELD', tagline: 'Scattered hard cover. Build your own maze.',
+    obstacles: [
+      ...block(3, 2, 4, 3), ...block(3, 11, 4, 12), ...block(8, 6, 9, 7),
+      ...block(11, 2, 12, 3), ...block(11, 11, 12, 12), ...block(15, 6, 16, 7),
+    ],
+  },
+]

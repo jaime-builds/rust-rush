@@ -173,14 +173,14 @@
 - [x] Tower glossary — Tower/Hostile Registry tabs, all stats + evolution paths
 - [ ] Evolution cost balance review (2× multiplier is a first-draft number — Jaime's call)
 
-### Phase 18: Sound & Music
-- [ ] Background music
-- [ ] Tower placement sound
-- [ ] Tower shooting sounds
-- [ ] Enemy death sounds
-- [ ] Wave start/end sounds
-- [ ] UI click sounds
-- [ ] Mute/volume controls
+### Phase 18: Sound & Music ✅ **NEW!** (July 14–15 overnight — see SESSION-LOG.md)
+- [x] Procedurally synthesized audio via Web Audio API (oscillators/filters/envelopes) — no licensed/sourced sample packs, matches NEON IRONLINE's electronic aesthetic natively and needs no asset files
+- [x] Background music — generative ambient synth pad loop (low drone + slow arpeggio), not a composed track; must be mutable
+- [x] Explosion sound (tower hit/kill) — the only per-action combat SFX; deliberately skipping tower placement, shooting, and enemy death sounds per Jaime's "not overwhelming" direction
+- [x] Evolve confirm sound
+- [x] Wave start sound
+- [x] Game over sound
+- [x] Mute/volume controls — setting persists across sessions (localStorage, same pattern as high score); simple on/off mute (♪ button in header), no slider
 
 ### Phase 19: Visual Polish (largely done July 3 — "NEON IRONLINE" overhaul)
 - [ ] Tower placement animations
@@ -198,12 +198,17 @@
 - [ ] Tutorial/help screen
 
 ### Phase 21: Public Deployment
-- [ ] Choose hosting platform (Railway, Render, or Fly.io — all have free tiers)
-- [ ] Dockerize the Go server
-- [ ] Configure environment variables (port, CORS origin)
-- [ ] Update WebSocket URL to production endpoint
-- [ ] Deploy and verify WebSocket connections work in production
-- [ ] Custom domain (optional)
+- [ ] Self-host on NinjaUnraid (192.168.0.12) — not a hosting platform (Railway/Fly.io dropped free tiers, Render's free tier cold-starts after 15min idle — bad fit for a WebSocket game)
+- [x] Dockerize the Go server, `pull_policy: never` pattern (matches ytplayer/ledgerview) — multi-stage `Dockerfile` at repo root, built + smoke-tested July 14–15; compose service example in the Dockerfile header
+- [ ] Caddy site block + Cloudflare Tunnel route — `rust-rush.jaime.build` (on-server work, not in repo)
+- [x] Configure environment variables (port, CORS origin) — `PORT`, `STATS_DB`, `ALLOWED_ORIGINS` (+ existing `STATIC_DIR`), all with dev defaults
+- [x] Update WebSocket URL to production endpoint (already derived from `window.location` in prod builds, per Phase 16)
+- [ ] Deploy and verify WebSocket connections work over the tunnel
+- [x] Basic stats/metrics (private, no accounts/names): ✅ July 14–15
+  - [x] SQLite file next to the server, one row per completed game (timestamp, wave reached, final score, duration), written on the `game_over` phase transition — pure-Go driver (`modernc.org/sqlite`), path via `STATS_DB`
+  - [x] Concurrent player count from the existing hub client map (no new tracking needed)
+  - [x] Internal `/stats` JSON endpoint (not linked publicly) — concurrent players, total games, wave distribution, top 10 scores
+  - [ ] Small internal stats UI — later phase, not scoped yet
 - [ ] Share public link
 
 ### Phase 22: Multiplayer Features
@@ -219,7 +224,7 @@
 - [ ] Save/load game state
 
 ### Phase 24: Advanced Features
-- [ ] 4-5 built-in map layouts with a map select screen (distinct from map editor/custom maps below — hand-designed/Fable-built, not user-created)
+- [x] 4-5 built-in map layouts with a map select screen (distinct from map editor/custom maps below — hand-designed/Fable-built, not user-created) — ✅ July 14–15: 6-map registry (Clearway/Switchback/Gauntlet/Crucible/Needle/Pylon Field), per-room selection via `new_game`, NEON select screen. Per-map difficulty variance (path lengths 20–44 cells) flagged, then **playtested and closed July 15–16**: wave 25 + new high score on Clearway (shortest path, expected hardest) — no rebalance needed.
 - [ ] Map editor
 - [ ] Custom maps
 - [ ] Different game modes (endless, timed)
@@ -281,7 +286,7 @@
 ### Beta Release (Next Target)
 - [x] Score system ✅
 - [x] Tower upgrades ✅
-- [ ] Sound effects
+- [x] Sound effects ✅
 - [x] Enemy glossary / wave preview ✅
 - [x] High score tracking ✅
 - [x] Local production build (one terminal) ✅
@@ -528,5 +533,5 @@ only 1–2 evolutions per run by wave 20. See SESSION-LOG.md for the numbers.
 
 ---
 
-**Last Updated**: July 13, 2026
-**Status**: Phase 17 Complete ✅ (Tesla + Tower Evolution + tower glossary) | Next: sound, deployment, difficulty retune (Phases 18+) 🚧
+**Last Updated**: July 15, 2026
+**Status**: Phases 18 (sound), 21-prep (Dockerfile/env/stats), and 24-maps (6-map roster + select screen) built overnight July 14–15 ✅ — see SESSION-LOG.md for per-feature detail | Next: review + commit, then actual deployment on NinjaUnraid 🚀

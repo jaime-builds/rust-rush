@@ -4,6 +4,7 @@ import {
   Tower, TowerType, BaseTowerType, EvolvedTowerType, Enemy, EnemyType, Projectile,
   MuzzleFlash, Explosion, Arc, Position, GameState,
   TOWER_COSTS, EVOLUTION_OPTIONS, GRID_WIDTH, GRID_HEIGHT, CELL_SIZE,
+  GAME_MAPS, GameMapInfo,
 } from '../types/game'
 
 // ————————————————————————————————————————————————————————————————————————
@@ -444,6 +445,20 @@ const EnemyGlyph = ({ type, size = 14 }: { type: string, size?: number }) => {
   )
 }
 
+// MapThumb — miniature schematic of one map for the selection screen: the
+// 20×15 board with wall cells, spawn, and goal. Drawn from the client-side
+// GAME_MAPS mirror (previews only — in-game walls come from the server).
+const MapThumb = ({ map }: { map: GameMapInfo }) => (
+  <svg viewBox="0 0 20 15" className="map-thumb" aria-hidden="true">
+    <rect x="0" y="0" width="20" height="15" fill={PALETTE.bgDeep} />
+    {map.obstacles.map((o, i) => (
+      <rect key={i} x={o.x} y={o.y} width="1" height="1" fill={PALETTE.wallEdge} />
+    ))}
+    <rect x="0" y="7" width="1" height="1" fill={PALETTE.spawn} />
+    <rect x="19" y="7" width="1" height="1" fill={PALETTE.goal} />
+  </svg>
+)
+
 interface GameCanvasProps {
   isConnected: boolean
   onPlaceTower: (x: number, y: number, towerType: string) => void
@@ -451,7 +466,8 @@ interface GameCanvasProps {
   onUpgradeTower: (towerId: number) => void
   onEvolveTower: (towerId: number, evolution: string) => void
   onStartWave: () => void
-  onNewGame: () => void
+  // Starts a fresh run; mapId switches the room's map (omit = same map).
+  onNewGame: (mapId?: string) => void
   onSpawnEnemy?: () => void
   gameState?: GameState
   // Newest snapshot, updated on every server message (60/sec). The canvas
@@ -499,6 +515,11 @@ const GameCanvas = ({
   const prevPhaseRef = useRef<string>('waiting')
   const [showGlossary, setShowGlossary] = useState(false)
   const [glossaryTab, setGlossaryTab] = useState<'towers' | 'enemies'>('towers')
+  // Map selection: happens before a game starts (auto-opens on a fresh
+  // board, or via NEW GAME / CHANGE MAP). Never mid-game.
+  const [showMapSelect, setShowMapSelect] = useState(false)
+  const [pendingMapId, setPendingMapId] = useState<string>(GAME_MAPS[0].id)
+  const mapSelectAutoOpenedRef = useRef(false)
 
   // Sync refs (game state itself arrives via liveStateRef at full rate)
   hoveredCellRef.current = hoveredCell
@@ -509,6 +530,24 @@ const GameCanvas = ({
   const gold = gameState?.gold ?? 200
   const isWaveActive = phase === 'active'
   const isGameOver = phase === 'game_over'
+
+  // Auto-open the map selector once, on joining a fresh board (nothing
+  // placed, wave 1, waiting). Rejoining a game in progress skips it.
+  useEffect(() => {
+    if (mapSelectAutoOpenedRef.current || !isConnected || !gameState) return
+    if (phase === 'waiting' && gameState.wave === 1 && gameState.towers.length === 0 && gameState.score === 0) {
+      mapSelectAutoOpenedRef.current = true
+      setPendingMapId(gameState.map_id ?? GAME_MAPS[0].id)
+      setShowMapSelect(true)
+    } else {
+      mapSelectAutoOpenedRef.current = true // game in progress — never auto-open
+    }
+  }, [isConnected, gameState, phase])
+
+  const openMapSelect = () => {
+    setPendingMapId(gameState?.map_id ?? GAME_MAPS[0].id)
+    setShowMapSelect(true)
+  }
 
   // Auto wave countdown logic
   useEffect(() => {
@@ -707,7 +746,9 @@ const GameCanvas = ({
 
   const ensureBackground = (gs?: GameState): HTMLCanvasElement => {
     const obstacles = gs?.obstacles ?? []
-    const key = `${obstacles.length}|${gs?.spawn_point?.x},${gs?.spawn_point?.y}|${gs?.goal_point?.x},${gs?.goal_point?.y}`
+    // map_id is in the key: two maps could share an obstacle count, and the
+    // pre-rendered board must repaint when the room switches maps.
+    const key = `${gs?.map_id ?? ''}|${obstacles.length}|${gs?.spawn_point?.x},${gs?.spawn_point?.y}|${gs?.goal_point?.x},${gs?.goal_point?.y}`
     if (bgCanvasRef.current && bgKeyRef.current === key) return bgCanvasRef.current
 
     const c = document.createElement('canvas')
@@ -2106,7 +2147,7 @@ const GameCanvas = ({
 
   return (
     <div className="game-canvas-container">
-      {isGameOver && (
+      {isGameOver && !showMapSelect && (
         <div className="game-over-overlay">
           <div className="game-over-box panel">
             <div className="game-over-title">SIGNAL LOST</div>
@@ -2119,9 +2160,51 @@ const GameCanvas = ({
             ) : (
               <p className="game-over-best">BEST {highScore.toLocaleString()}</p>
             )}
-            <button onClick={onNewGame} className="btn btn-primary btn-big">
+            <button onClick={() => onNewGame()} className="btn btn-primary btn-big">
               REDEPLOY ▸
             </button>
+            <button onClick={openMapSelect} className="btn btn-big">
+              CHANGE MAP
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showMapSelect && (
+        <div className="map-select-overlay">
+          <div className="map-select-box panel">
+            <div className="map-select-title">SELECT DEPLOYMENT ZONE</div>
+            <div className="map-select-grid">
+              {GAME_MAPS.map(m => (
+                <button
+                  key={m.id}
+                  className={`map-card ${pendingMapId === m.id ? 'selected' : ''}`}
+                  onClick={() => setPendingMapId(m.id)}
+                  title={m.tagline}
+                >
+                  <MapThumb map={m} />
+                  <span className="map-card-name">
+                    {m.name}
+                    {gameState?.map_id === m.id && <span className="map-card-current"> ● ACTIVE</span>}
+                  </span>
+                  <span className="map-card-tag">{m.tagline}</span>
+                </button>
+              ))}
+            </div>
+            <div className="map-select-actions">
+              <button
+                className="btn btn-primary btn-big"
+                onClick={() => {
+                  onNewGame(pendingMapId)
+                  setShowMapSelect(false)
+                }}
+                disabled={!isConnected}
+              >
+                DEPLOY ▸
+              </button>
+              <button className="btn" onClick={() => setShowMapSelect(false)}>CANCEL</button>
+            </div>
+            <p className="map-select-warn">Deploying starts a fresh run on the selected map.</p>
           </div>
         </div>
       )}
@@ -2132,6 +2215,7 @@ const GameCanvas = ({
         <div className="info-item"><span className="label">Score</span><span className="value">{(gameState?.score ?? 0).toLocaleString()}</span></div>
         <div className="info-item"><span className="label">Best</span><span className="value">{highScore.toLocaleString()}</span></div>
         <div className="info-item"><span className="label">Wave</span><span className="value">{String(gameState?.wave ?? 1).padStart(2, '0')}</span></div>
+        <div className="info-item"><span className="label">Zone</span><span className="value">{GAME_MAPS.find(m => m.id === (gameState?.map_id ?? 'open'))?.name ?? '—'}</span></div>
         <div className="info-item"><span className="label">Link</span><span className={`value ${isConnected ? 'connected' : 'disconnected'}`}>{isConnected ? 'ONLINE' : 'OFFLINE'}</span></div>
       </div>
 
@@ -2314,7 +2398,7 @@ const GameCanvas = ({
         >
           AUTO: {autoWave ? 'ON' : 'OFF'}
         </button>
-        <button className="btn" onClick={onNewGame} disabled={!isConnected}>
+        <button className="btn" onClick={openMapSelect} disabled={!isConnected}>
           NEW GAME
         </button>
         <button

@@ -3,6 +3,7 @@ import './App.css'
 import GameCanvas from './game/GameCanvas'
 import { useWebSocket } from './hooks/useWebSocket'
 import { GameState } from './types/game'
+import { sound } from './audio/sound'
 
 // Dev: Vite serves the client on 5173, Go server runs separately on 8080.
 // Production build: the Go server serves the client itself, so derive the
@@ -40,12 +41,32 @@ function App() {
   const { status, subscribe, sendMessage } = useWebSocket(WS_URL)
   const [hasJoined, setHasJoined] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
+  const [muted, setMuted] = useState(sound.isMuted())
   const [gameState, setGameState] = useState<GameState>(defaultGameState)
 
   // Newest server snapshot, updated on every message for the canvas loop.
   const liveStateRef = useRef<GameState>(defaultGameState)
   const lastCommitRef = useRef(0)
   const pendingCommitRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Highest explosion effect ID heard so far — new IDs above it trigger the
+  // explosion SFX (effect IDs are a monotonic per-game counter).
+  const lastExplosionIdRef = useRef(0)
+
+  // Browsers only allow audio after a user gesture: the first pointer/key
+  // input unlocks the AudioContext and starts the ambient music loop.
+  useEffect(() => {
+    const unlock = () => {
+      sound.unlock()
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+    window.addEventListener('pointerdown', unlock)
+    window.addEventListener('keydown', unlock)
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+  }, [])
 
   useEffect(() => {
     if (status.isConnected && !hasJoined) {
@@ -93,9 +114,38 @@ function App() {
         return
       }
 
+      // Evolve confirm SFX rides the existing server ack — no new messages.
+      if (message.type === 'evolve_tower' && message.payload?.status === 'evolved') {
+        sound.evolveConfirm()
+        return
+      }
+
       if (message.type === 'game_state' && message.payload?.state) {
         const incoming: GameState = message.payload.state
-        const phaseChanged = incoming.phase !== liveStateRef.current.phase
+        const prevPhase = liveStateRef.current.phase
+        const phaseChanged = incoming.phase !== prevPhase
+
+        // Sound triggers are client-side reactions to server state changes.
+        if (phaseChanged) {
+          if (prevPhase === 'waiting' && incoming.phase === 'active') {
+            sound.waveStart()
+          } else if (incoming.phase === 'game_over') {
+            sound.gameOver()
+          }
+        }
+        const explosions = incoming.explosions ?? []
+        let maxId = 0
+        for (const e of explosions) {
+          if (e.id > maxId) maxId = e.id
+        }
+        if (maxId > lastExplosionIdRef.current) {
+          sound.explosion()
+          lastExplosionIdRef.current = maxId
+        } else if (maxId > 0 && maxId < lastExplosionIdRef.current) {
+          // Effect IDs restarted (new game) — resync without playing.
+          lastExplosionIdRef.current = maxId
+        }
+
         liveStateRef.current = incoming
         if (phaseChanged || showDebug || UI_UPDATE_INTERVAL_MS <= 0) {
           commitNow()
@@ -157,9 +207,15 @@ function App() {
     sendMessage({ type: 'start_wave', room_id: ROOM_ID })
   }, [hasJoined, sendMessage])
 
-  const handleNewGame = useCallback(() => {
+  // mapId (optional) selects the map for the fresh run; omitted = keep the
+  // room's current map.
+  const handleNewGame = useCallback((mapId?: string) => {
     if (!hasJoined) return
-    sendMessage({ type: 'new_game', room_id: ROOM_ID })
+    sendMessage({
+      type: 'new_game',
+      room_id: ROOM_ID,
+      ...(mapId ? { payload: { map_id: mapId } } : {}),
+    })
     liveStateRef.current = defaultGameState
     setGameState(defaultGameState)
   }, [hasJoined, sendMessage])
@@ -200,6 +256,13 @@ function App() {
             title="Fast forward: 3x game speed for testing"
           >
             FF ×3: {fastForward ? 'ON' : 'OFF'}
+          </button>
+          <button
+            className={`btn btn-inline ${muted ? '' : 'btn-toggled'}`}
+            onClick={() => setMuted(sound.toggleMute())}
+            title={muted ? 'Sound is muted — click to unmute' : 'Click to mute all sound'}
+          >
+            ♪ {muted ? 'OFF' : 'ON'}
           </button>
         </div>
 
