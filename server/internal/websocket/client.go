@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -21,11 +23,32 @@ const (
 	maxMessageSize = 512 * 1024
 )
 
+// allowedOrigins comes from the ALLOWED_ORIGINS env var (comma-separated,
+// e.g. "https://rust-rush.jaime.build"). Empty (the dev default) allows all
+// origins; in production the client is served same-origin by this server, so
+// a single entry matching the public URL is enough.
+var allowedOrigins = func() map[string]bool {
+	origins := make(map[string]bool)
+	for _, o := range strings.Split(os.Getenv("ALLOWED_ORIGINS"), ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			origins[o] = true
+		}
+	}
+	return origins
+}()
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins in development
+		if len(allowedOrigins) == 0 {
+			return true // no ALLOWED_ORIGINS configured — dev mode, allow all
+		}
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // non-browser client (curl, tests)
+		}
+		return allowedOrigins[origin]
 	},
 }
 
@@ -399,7 +422,17 @@ func (c *Client) handleMessage(msg *Message) {
 			return
 		}
 
-		room.Reset()
+		// Optional map selection: new_game may carry a map_id. Unknown or
+		// missing IDs keep the room's current map.
+		if mapID, ok := msg.Payload["map_id"].(string); ok && mapID != "" {
+			if !room.ResetToMap(mapID) {
+				log.Printf("⚠️ Unknown map_id %q from client %s — kept current map", mapID, c.id)
+			} else {
+				log.Printf("🗺️ Room %s switched to map %s", roomID, mapID)
+			}
+		} else {
+			room.Reset()
+		}
 		log.Printf("🔄 New game started in room %s", roomID)
 		c.hub.BroadcastGameState(roomID)
 

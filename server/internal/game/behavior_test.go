@@ -8,8 +8,18 @@ import (
 
 // Test helpers -----------------------------------------------------------
 
+// newTestGame pins the Switchback map: these behavior tests were written
+// against its bulkheads (route lengths, obstacle-cell rejections), and the
+// per-room default is now the open map.
 func newTestGame() *GameStateWithShooting {
+	return newTestGameOnMap("switchback")
+}
+
+func newTestGameOnMap(mapID string) *GameStateWithShooting {
 	gs := NewGameStateWithShooting("test")
+	if !gs.ResetToMap(mapID) {
+		panic("unknown test map: " + mapID)
+	}
 	gs.SpawnPoint = &Position{X: 0, Y: 7}
 	gs.GoalPoint = &Position{X: 19, Y: 7}
 	return gs
@@ -24,7 +34,7 @@ func wallColumn(t *testing.T, gs *GameStateWithShooting, x int) {
 	gs.Gold = 1_000_000
 	gs.mu.Unlock()
 	for y := 0; y < 15; y++ {
-		if isObstacle(x, y) {
+		if gs.isObstacle(x, y) {
 			continue // already walled by the map itself
 		}
 		if _, err := gs.AddTower(float64(x), float64(y), "basic"); err != nil {
@@ -463,7 +473,7 @@ func TestAddTowerPlacementValidation(t *testing.T) {
 	if _, err := gs.AddTower(5, 5, "basic"); !errors.Is(err, ErrInvalidPlacement) {
 		t.Error("occupied cell accepted")
 	}
-	for _, o := range mapObstacles {
+	for _, o := range GetMapDef("switchback").Obstacles {
 		if _, err := gs.AddTower(o.X, o.Y, "basic"); !errors.Is(err, ErrInvalidPlacement) {
 			t.Fatalf("obstacle cell (%v,%v) accepted", o.X, o.Y)
 		}
@@ -474,18 +484,79 @@ func TestAddTowerPlacementValidation(t *testing.T) {
 	}
 }
 
-// Any future edit to the map layout must keep the spawn→goal route open and
-// must actually block the cells it claims to.
-func TestMapHasOpenPath(t *testing.T) {
-	gs := newTestGame()
+// Any future edit to any map layout must keep the spawn→goal route open and
+// must actually block the cells it claims to — every registry entry is
+// checked, not just the original Switchback.
+func TestAllMapsHaveOpenPath(t *testing.T) {
+	if len(MapRegistry) < 5 {
+		t.Fatalf("map registry has %d maps, want at least 5", len(MapRegistry))
+	}
+	for _, m := range MapRegistry {
+		t.Run(m.ID, func(t *testing.T) {
+			gs := newTestGameOnMap(m.ID)
+			path := gs.FindPathFromSpawn()
+			if path == nil {
+				t.Fatal("map layout blocks the spawn→goal path entirely")
+			}
+			for _, p := range path {
+				if gs.isObstacle(int(p.X), int(p.Y)) {
+					t.Fatalf("path passes through obstacle at %v", p)
+				}
+			}
+			for _, o := range m.Obstacles {
+				if !gs.isObstacle(int(o.X), int(o.Y)) {
+					t.Fatalf("declared obstacle (%v,%v) not blocked in lookup set", o.X, o.Y)
+				}
+			}
+			t.Logf("%s (%s): path length %d cells (%d obstacles)", m.ID, m.Name, len(path), len(m.Obstacles))
+		})
+	}
+}
+
+// The default for fresh rooms is the open map, and new_game map switching
+// works through ResetToMap.
+func TestMapSelection(t *testing.T) {
+	gs := NewGameStateWithShooting("test")
+	if gs.GetSnapshot().MapID != DefaultMapID {
+		t.Fatalf("fresh room map = %q, want %q", gs.GetSnapshot().MapID, DefaultMapID)
+	}
+	if len(gs.GetSnapshot().Obstacles) != 0 {
+		t.Fatalf("open map should have no obstacles, got %d", len(gs.GetSnapshot().Obstacles))
+	}
+
+	if !gs.ResetToMap("needle") {
+		t.Fatal("ResetToMap rejected a valid map ID")
+	}
+	snap := gs.GetSnapshot()
+	if snap.MapID != "needle" || len(snap.Obstacles) != len(GetMapDef("needle").Obstacles) {
+		t.Fatalf("after ResetToMap: map=%q obstacles=%d", snap.MapID, len(snap.Obstacles))
+	}
+
+	// The map's walls now drive placement validation and pathfinding.
+	gs.SpawnPoint = &Position{X: 0, Y: 7}
+	gs.GoalPoint = &Position{X: 19, Y: 7}
+	if _, err := gs.AddTower(10, 0, "basic"); err == nil {
+		t.Error("placement on a needle wall cell was accepted")
+	}
 	path := gs.FindPathFromSpawn()
 	if path == nil {
-		t.Fatal("map layout blocks the spawn→goal path entirely")
+		t.Fatal("no path on needle map")
 	}
+	through := false
 	for _, p := range path {
-		if isObstacle(int(p.X), int(p.Y)) {
-			t.Fatalf("path passes through obstacle at %v", p)
+		if int(p.X) == 10 && int(p.Y) == 7 {
+			through = true
 		}
 	}
-	t.Logf("map path length: %d cells (%d obstacles)", len(path), len(mapObstacles))
+	if !through {
+		t.Error("needle path does not pass through the (10,7) gate")
+	}
+
+	// Unknown ID: reset still happens, map unchanged.
+	if gs.ResetToMap("no-such-map") {
+		t.Error("ResetToMap accepted an unknown map ID")
+	}
+	if gs.GetSnapshot().MapID != "needle" {
+		t.Errorf("map changed on unknown ID: %q", gs.GetSnapshot().MapID)
+	}
 }

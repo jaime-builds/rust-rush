@@ -16,7 +16,7 @@ func (gs *GameStateWithShooting) findPathReference(start, goal Position) []Posit
 	const gridHeight = 15
 
 	blocked := make(map[string]bool)
-	for _, o := range mapObstacles {
+	for _, o := range gs.mapDef.Obstacles {
 		blocked[fmt.Sprintf("%d,%d", int(o.X), int(o.Y))] = true
 	}
 	for _, tower := range gs.Towers {

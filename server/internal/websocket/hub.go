@@ -92,6 +92,14 @@ func (h *Hub) Run() {
 	}
 }
 
+// ClientCount returns the number of currently connected clients — the
+// "concurrent players" stat. Pure read of the existing clients map.
+func (h *Hub) ClientCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
+}
+
 // setClientRoom updates a client's room under the hub lock, since broadcast
 // paths read roomID concurrently.
 func (h *Hub) setClientRoom(client *Client, roomID string) {

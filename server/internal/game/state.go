@@ -248,13 +248,25 @@ type GameStateWithShooting struct {
 	SpeedMultiplier  float64       `json:"speed_multiplier"`
 	SpawnPoint       *Position     `json:"spawn_point,omitempty"`
 	GoalPoint        *Position     `json:"goal_point,omitempty"`
-	// Obstacles is the static map layout (permanent walls). Shared package
+	// Obstacles is the static map layout (permanent walls). Shared registry
 	// slice — never mutated after init.
 	Obstacles []Position `json:"obstacles,omitempty"`
+	// MapID names the room's current map (see MapRegistry). Selected via the
+	// new_game message; only populated on snapshots.
+	MapID string `json:"map_id,omitempty"`
 	// WavePreview describes the composition of wave `Wave` — the upcoming wave
 	// during the waiting phase, the in-flight wave during the active phase.
 	// Only populated on snapshots.
-	WavePreview      []WavePreviewEntry `json:"wave_preview,omitempty"`
+	WavePreview []WavePreviewEntry `json:"wave_preview,omitempty"`
+	// OnGameOver, when set, fires exactly once per game-over transition (the
+	// game-over branch in Update runs before the phase flips, and Update
+	// early-returns once the phase is game_over). Called on its own goroutine
+	// so slow consumers (the stats DB write) never stall the 60 FPS loop.
+	// Set at room creation, before the game loop starts — never mutated after.
+	OnGameOver func(wave, score int, duration float64) `json:"-"`
+	// mapDef is the room's active map (obstacles + flat lookup grid). Only
+	// swapped under the write lock (ResetToMap); registry defs are immutable.
+	mapDef           *MapDef
 	mu               sync.RWMutex
 	nextTowerID      int
 	nextEnemyID      int
@@ -264,8 +276,11 @@ type GameStateWithShooting struct {
 }
 
 func NewGameStateWithShooting(roomID string) *GameStateWithShooting {
+	defaultMap := GetMapDef(DefaultMapID)
 	return &GameStateWithShooting{
 		RoomID:           roomID,
+		MapID:            defaultMap.ID,
+		mapDef:           defaultMap,
 		Players:          make([]string, 0),
 		Towers:           make([]Tower, 0),
 		Enemies:          make([]Enemy, 0),
@@ -292,7 +307,26 @@ func NewGameStateWithShooting(roomID string) *GameStateWithShooting {
 func (gs *GameStateWithShooting) Reset() {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+	gs.resetLocked()
+}
 
+// ResetToMap resets the game AND switches the room to mapID — the new-game
+// path when the player picked a map. An unknown ID keeps the current map
+// (the reset still happens); returns whether the ID was recognized. Safe as
+// one atomic step: the map swap and the field wipe share the write lock.
+func (gs *GameStateWithShooting) ResetToMap(mapID string) bool {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	m := GetMapDef(mapID)
+	if m != nil {
+		gs.mapDef = m
+		gs.MapID = m.ID
+	}
+	gs.resetLocked()
+	return m != nil
+}
+
+func (gs *GameStateWithShooting) resetLocked() {
 	// Cancel any active spawn goroutine
 	close(gs.spawnCancel)
 	gs.spawnCancel = make(chan struct{})
@@ -338,6 +372,9 @@ func (gs *GameStateWithShooting) Update(deltaTime float64) {
 	if gs.Health <= 0 {
 		gs.Health = 0
 		gs.Phase = PhaseGameOver
+		if gs.OnGameOver != nil {
+			go gs.OnGameOver(gs.Wave, gs.Score, gs.GameTime)
+		}
 	}
 
 	if gs.Phase == PhaseActive && len(gs.Enemies) == 0 && gs.EnemiesRemaining == 0 {
@@ -896,7 +933,7 @@ func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) (Tower
 	if cx < 0 || cx >= gridWidth || cy < 0 || cy >= gridHeight {
 		return Tower{}, ErrInvalidPlacement
 	}
-	if isObstacle(cx, cy) {
+	if gs.isObstacle(cx, cy) {
 		return Tower{}, ErrInvalidPlacement
 	}
 	if gs.SpawnPoint != nil && cx == int(gs.SpawnPoint.X) && cy == int(gs.SpawnPoint.Y) {
@@ -1151,7 +1188,8 @@ func (gs *GameStateWithShooting) GetSnapshot() *GameStateWithShooting {
 		SpeedMultiplier:  gs.SpeedMultiplier,
 		SpawnPoint:       gs.SpawnPoint,
 		GoalPoint:        gs.GoalPoint,
-		Obstacles:        mapObstacles,
+		Obstacles:        gs.mapDef.Obstacles,
+		MapID:            gs.MapID,
 		WavePreview:      buildWavePreview(gs.Wave),
 	}
 
@@ -1335,7 +1373,7 @@ func (gs *GameStateWithShooting) findPath(start, goal Position) []Position {
 		return []Position{start}
 	}
 
-	blocked := obstacleSet // copy: map walls block exactly like towers
+	blocked := gs.mapDef.set // copy: map walls block exactly like towers
 	for _, tower := range gs.Towers {
 		tx := int(math.Round(tower.Position.X))
 		ty := int(math.Round(tower.Position.Y))
@@ -1415,6 +1453,12 @@ func (gs *GameStateWithShooting) RecalculateEnemyPaths() {
 			enemy.PathIndex = 0
 		}
 	}
+}
+
+// isObstacle checks the room's active map. Callers hold gs.mu (read or
+// write); mapDef itself is immutable, only the pointer swaps.
+func (gs *GameStateWithShooting) isObstacle(x, y int) bool {
+	return gs.mapDef.isObstacle(x, y)
 }
 
 func (gs *GameStateWithShooting) FindPathFromSpawn() []Position {

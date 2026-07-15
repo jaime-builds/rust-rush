@@ -12,6 +12,8 @@ type Manager struct {
 	shootingRooms map[string]*GameStateWithShooting
 	mu            sync.RWMutex
 	broadcast     chan BroadcastMessage
+	// onGameOver is copied onto every room at creation (see SetGameOverHook).
+	onGameOver func(roomID string, wave, score int, duration float64)
 }
 
 // BroadcastMessage contains room ID and data to broadcast
@@ -40,8 +42,23 @@ func (m *Manager) GetOrCreateShootingRoom(roomID string) (room *GameStateWithSho
 		return room, false
 	}
 	room = NewGameStateWithShooting(roomID)
+	if m.onGameOver != nil {
+		hook := m.onGameOver
+		room.OnGameOver = func(wave, score int, duration float64) {
+			hook(roomID, wave, score, duration)
+		}
+	}
 	m.shootingRooms[roomID] = room
 	return room, true
+}
+
+// SetGameOverHook installs a callback fired once per completed game in any
+// room (used by main to persist stats). Call before serving traffic — rooms
+// created earlier won't have it.
+func (m *Manager) SetGameOverHook(hook func(roomID string, wave, score int, duration float64)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onGameOver = hook
 }
 
 // GetShootingRoom retrieves a shooting game room by ID
