@@ -6,6 +6,7 @@ import {
   TOWER_COSTS, EVOLUTION_OPTIONS, GRID_WIDTH, GRID_HEIGHT, CELL_SIZE,
   GAME_MAPS, GameMapInfo,
 } from '../types/game'
+import { settings } from '../settings'
 
 // ————————————————————————————————————————————————————————————————————————
 // "NEON IRONLINE" visual theme.
@@ -201,6 +202,10 @@ const EVO_STATS: Record<EvolvedTowerType, string> = {
   amplifier: 'no attack · 3.5u aura · +25% dmg & rate',
 }
 
+// Tower hotkey/button order — keys 1-5 map to this, matching the on-screen
+// button row (Pulse, Railgun, Mortar, Stasis, Tesla).
+const TOWER_ORDER: BaseTowerType[] = ['basic', 'sniper', 'splash', 'slow', 'tesla']
+
 const HIGH_SCORE_KEY = 'rustRushHighScore'
 
 const readHighScore = (): number => {
@@ -333,6 +338,59 @@ const roundRectPath = (ctx: CanvasRenderingContext2D, x: number, y: number, w: n
   ctx.arcTo(x, y, x + w, y, r)
   ctx.closePath()
 }
+
+// ————————————————————————————————————————————————————————————————————————
+// Phase 19 effect helpers. All three effects are deliberately cheap: no
+// particle systems, no per-frame allocations beyond one gradient on the
+// (rare) boss beam.
+// ————————————————————————————————————————————————————————————————————————
+
+// Tower materialize: scale-up from nothing with a slight overshoot so the
+// pop reads as "locking into place". ~180ms, one tower at a time.
+const PLACE_ANIM_MS = 180
+const easeOutBack = (p: number): number => {
+  const c = 1.2 // gentler than the textbook 1.70158 — a nudge, not a bounce
+  const q = p - 1
+  return 1 + (c + 1) * q * q * q + c * q * q
+}
+
+// Boss beam-down: total effect length; the boss itself fades in over the
+// back portion once the streak has mostly collapsed.
+const BEAM_MS = 500
+const BEAM_BOSS_FADE_START = 0.45
+
+// Low-health red pulse: "health below 5" in the Phase 19 spec, read in board
+// terms — every leak costs exactly 10 health (health only ever moves in -10
+// steps from 100), so "below 5" = fewer than 5 remaining hits = health < 50.
+// A literal health<5 is unreachable while alive.
+const LOW_HEALTH_PULSE_THRESHOLD = 50
+// One continuous slow breath — time-based, so further leaks while already
+// low never restart or intensify it. Peak alpha stays under 0.1 on an
+// edges-only vignette: deliberately "too subtle" per the design call.
+const LOW_HEALTH_PULSE_PERIOD_S = 3.2
+
+let alertVignetteCache: HTMLCanvasElement | null = null
+const alertVignette = (w: number, h: number): HTMLCanvasElement => {
+  if (!alertVignetteCache || alertVignetteCache.width !== w || alertVignetteCache.height !== h) {
+    const c = document.createElement('canvas')
+    c.width = w
+    c.height = h
+    const g = c.getContext('2d')!
+    const grad = g.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.38, w / 2, h / 2, Math.max(w, h) * 0.62)
+    grad.addColorStop(0, 'rgba(255, 59, 78, 0)')
+    grad.addColorStop(1, 'rgba(255, 59, 78, 0.85)')
+    g.fillStyle = grad
+    g.fillRect(0, 0, w, h)
+    alertVignetteCache = c
+  }
+  return alertVignetteCache
+}
+
+// Screen shake: two incommensurate sine waves, quadratic decay. Small and
+// short by design — it fires on health loss only (a rare, meaningful event),
+// never on tower hits.
+const SHAKE_MS = 280
+const SHAKE_AMP_PX = 3.5
 
 const shortestAngleDelta = (a: number): number => {
   let d = a % (Math.PI * 2)
@@ -501,6 +559,18 @@ const GameCanvas = ({
   const bgKeyRef = useRef('')
   const enemyHeadingsRef = useRef<Map<number, { x: number; y: number; angle: number }>>(new Map())
   const projHeadingsRef = useRef<Map<number, { x: number; y: number; angle: number }>>(new Map())
+  // Phase 19 client-side one-shot effects: the server doesn't know about
+  // these, so arrival detection (new tower/boss IDs, health drops) happens
+  // here against the live snapshot. fxSeeded guards the first REAL snapshot
+  // (room_id present): a mid-game rejoin seeds silently instead of playing
+  // an arrival animation for everything already on the board.
+  const fxSeededRef = useRef(false)
+  const knownTowerIdsRef = useRef<Set<number>>(new Set())
+  const towerPlaceAnimsRef = useRef<Map<number, number>>(new Map()) // tower id → start (ms)
+  const knownBossIdsRef = useRef<Set<number>>(new Set())
+  const bossBeamAnimsRef = useRef<Map<number, number>>(new Map()) // enemy id → start (ms)
+  const prevHealthRef = useRef<number | null>(null)
+  const shakeStartRef = useRef<number | null>(null)
 
   const [hoveredCell, setHoveredCell] = useState<Position | null>(null)
   const [selectedTowerType, setSelectedTowerType] = useState<BaseTowerType | null>('basic')
@@ -622,6 +692,32 @@ const GameCanvas = ({
     }
   }, [gameState?.towers, selectedTower])
 
+  // Hotkeys: 1-5 select the base towers in button order, Escape deselects
+  // to NONE (same as the ∅ button). Guarded against focused text inputs so
+  // a future settings/chat field can't fire tower selection while typing.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      if (isGameOver) return
+      // While the settings modal is open, Escape belongs to it (close wins
+      // over deselect) and number keys shouldn't reach the board either.
+      if (document.querySelector('.settings-overlay')) return
+      if (e.key === 'Escape') {
+        setSelectedTowerType(null)
+        setSelectedTower(null)
+        return
+      }
+      if (e.key >= '1' && e.key <= '5') {
+        setSelectedTowerType(TOWER_ORDER[Number(e.key) - 1])
+        setSelectedTower(null)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isGameOver])
+
   // Any change of selection resets a half-finished evolve confirmation.
   const selectedTowerId = selectedTower?.id
   const selectedTowerVariant = selectedTower?.tower_type
@@ -661,7 +757,75 @@ const GameCanvas = ({
     const currentGold = gs?.gold ?? 200
     const currentPhase = gs?.phase || 'waiting'
     const currentIsGameOver = currentPhase === 'game_over'
-    const t = performance.now() / 1000
+    const nowMs = performance.now()
+    const t = nowMs / 1000
+
+    // 0. One-shot effect bookkeeping — only against real server snapshots
+    //    (room_id is never set on the client's default state).
+    if (gs?.room_id) {
+      const health = gs.health ?? 100
+      if (!fxSeededRef.current) {
+        fxSeededRef.current = true
+        currentTowers.forEach(tw => knownTowerIdsRef.current.add(tw.id))
+        currentEnemies.forEach(e => {
+          if (e.enemy_type === 'boss') knownBossIdsRef.current.add(e.id)
+        })
+        prevHealthRef.current = health
+      } else {
+        currentTowers.forEach(tw => {
+          if (!knownTowerIdsRef.current.has(tw.id)) {
+            knownTowerIdsRef.current.add(tw.id)
+            towerPlaceAnimsRef.current.set(tw.id, nowMs)
+          }
+        })
+        // New game wipes the board and restarts IDs at 1 — drop stale sets so
+        // the fresh run's IDs read as new placements/spawns again.
+        if (currentTowers.length === 0 && knownTowerIdsRef.current.size > 0) {
+          knownTowerIdsRef.current.clear()
+          towerPlaceAnimsRef.current.clear()
+        }
+        currentEnemies.forEach(e => {
+          if (e.enemy_type === 'boss' && !knownBossIdsRef.current.has(e.id)) {
+            knownBossIdsRef.current.add(e.id)
+            if (settings.current.bossBeamDown) bossBeamAnimsRef.current.set(e.id, nowMs)
+          }
+        })
+        if (currentEnemies.length === 0 && knownBossIdsRef.current.size > 0) {
+          knownBossIdsRef.current.clear()
+          bossBeamAnimsRef.current.clear()
+        }
+        const prevHealth = prevHealthRef.current ?? health
+        // Health only drops on a goal leak (-10) — the one "ouch" moment.
+        // It only rises on a new-game reset, which must not shake.
+        if (health < prevHealth && settings.current.screenShake) {
+          shakeStartRef.current = nowMs
+        }
+        prevHealthRef.current = health
+      }
+    }
+
+    // Screen shake offset for this frame (quadratic decay to zero).
+    let shakeX = 0
+    let shakeY = 0
+    if (shakeStartRef.current !== null) {
+      const sp = (nowMs - shakeStartRef.current) / SHAKE_MS
+      if (sp >= 1) {
+        shakeStartRef.current = null
+      } else {
+        const decay = (1 - sp) * (1 - sp)
+        shakeX = SHAKE_AMP_PX * decay * Math.sin(nowMs * 0.09)
+        shakeY = SHAKE_AMP_PX * decay * Math.sin(nowMs * 0.13 + 1.7)
+      }
+    }
+    const shaking = shakeX !== 0 || shakeY !== 0
+    if (shaking) {
+      // The translate exposes a sliver of raw canvas at the edges — pre-fill
+      // with the board's base color so it reads as shadow, not garbage.
+      ctx.fillStyle = PALETTE.bgDeep
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.save()
+      ctx.translate(shakeX, shakeY)
+    }
 
     // 1. Static layers (gradient, grid, bulkheads, portal pads) from the
     //    offscreen canvas — re-rendered only when the map changes.
@@ -706,13 +870,65 @@ const GameCanvas = ({
     }
 
     // 4. Entities.
-    currentTowers.forEach(tower => drawTower(ctx, tower, t, 1))
+    currentTowers.forEach(tower => {
+      // Placement materialize: scale the whole tower (plate, turret, pips)
+      // up from nothing around its cell center. Unconditional — towers place
+      // one at a time, so there is no density risk to toggle away.
+      const placedAt = towerPlaceAnimsRef.current.get(tower.id)
+      if (placedAt !== undefined) {
+        const p = (nowMs - placedAt) / PLACE_ANIM_MS
+        if (p >= 1) {
+          towerPlaceAnimsRef.current.delete(tower.id)
+          drawTower(ctx, tower, t, 1)
+        } else {
+          const s = Math.max(easeOutBack(p), 0.02)
+          const cx = tower.position.x * CELL_SIZE + CELL_SIZE / 2
+          const cy = tower.position.y * CELL_SIZE + CELL_SIZE / 2
+          ctx.save()
+          ctx.translate(cx, cy)
+          ctx.scale(s, s)
+          ctx.translate(-cx, -cy)
+          drawTower(ctx, tower, t, 1)
+          ctx.restore()
+        }
+      } else {
+        drawTower(ctx, tower, t, 1)
+      }
+    })
     const nextProjHeadings = new Map<number, { x: number; y: number; angle: number }>()
     currentProjectiles.forEach(p => drawProjectile(ctx, p, t, towerTypeById, enemyById, nextProjHeadings))
     projHeadingsRef.current = nextProjHeadings
 
     const nextEnemyHeadings = new Map<number, { x: number; y: number; angle: number }>()
-    currentEnemies.forEach(enemy => drawEnemy(ctx, enemy, t, nextEnemyHeadings))
+    currentEnemies.forEach(enemy => {
+      // Boss beam-down: streak first, then the boss fades in under it.
+      // Bosses only (rare — every 3rd wave from 11, capped at 6): regular
+      // enemy types spawn in dense bursts and get no per-unit animation.
+      const beamStart = enemy.enemy_type === 'boss' ? bossBeamAnimsRef.current.get(enemy.id) : undefined
+      if (beamStart === undefined) {
+        drawEnemy(ctx, enemy, t, nextEnemyHeadings)
+        return
+      }
+      const p = (nowMs - beamStart) / BEAM_MS
+      if (p >= 1) {
+        bossBeamAnimsRef.current.delete(enemy.id)
+        drawEnemy(ctx, enemy, t, nextEnemyHeadings)
+        return
+      }
+      if (p > BEAM_BOSS_FADE_START) {
+        ctx.save()
+        ctx.globalAlpha = (p - BEAM_BOSS_FADE_START) / (1 - BEAM_BOSS_FADE_START)
+        drawEnemy(ctx, enemy, t, nextEnemyHeadings)
+        ctx.restore()
+      } else {
+        // Boss not visible yet — keep its heading entry warm so it doesn't
+        // snap-rotate on its first drawn frame.
+        const hx = enemy.position.x * CELL_SIZE + CELL_SIZE / 2
+        const hy = enemy.position.y * CELL_SIZE + CELL_SIZE / 2
+        nextEnemyHeadings.set(enemy.id, enemyHeadingsRef.current.get(enemy.id) ?? { x: hx, y: hy, angle: 0 })
+      }
+      drawBossBeam(ctx, enemy.position, p)
+    })
     enemyHeadingsRef.current = nextEnemyHeadings
 
     // 5. Effects. Laser beams draw between towers and enemies (both already
@@ -738,6 +954,23 @@ const GameCanvas = ({
     if (liveSel) drawSelectionBrackets(ctx, liveSel.position)
     if (hoverPlacing && hovered && selType) {
       drawGhostTower(ctx, hovered, selType, t, hoverBlocked, currentGold >= TOWER_COSTS[selType])
+    }
+
+    if (shaking) ctx.restore()
+
+    // 8. Low-health status pulse — screen-space (outside the shake
+    //    transform), a single slow ambient breath while the run is critical.
+    const currentHealth = gs?.health ?? 100
+    if (
+      settings.current.lowHealthPulse &&
+      !currentIsGameOver &&
+      currentHealth > 0 &&
+      currentHealth < LOW_HEALTH_PULSE_THRESHOLD
+    ) {
+      const breath = 0.5 + 0.5 * Math.sin((2 * Math.PI * t) / LOW_HEALTH_PULSE_PERIOD_S)
+      ctx.globalAlpha = 0.04 + 0.05 * breath
+      ctx.drawImage(alertVignette(canvas.width, canvas.height), 0, 0)
+      ctx.globalAlpha = 1
     }
   }
   renderRef.current = render
@@ -2026,6 +2259,34 @@ const GameCanvas = ({
     ctx.restore()
   }
 
+  // Boss beam-down: a narrowing vertical light streak that collapses onto
+  // the spawn cell, plus a ground bloom. One gradient + one sprite blit per
+  // boss per frame for ~0.5s — no particle system, per the Phase 19 scope.
+  const drawBossBeam = (ctx: CanvasRenderingContext2D, pos: Position, p: number) => {
+    const x = pos.x * CELL_SIZE + CELL_SIZE / 2
+    const y = pos.y * CELL_SIZE + CELL_SIZE / 2
+    const fade = 1 - p
+    const accent = ENEMY_COLORS.boss
+    const h = 130
+    const w = 2 + 10 * fade
+
+    ctx.save()
+    ctx.globalCompositeOperation = 'lighter'
+    const grad = ctx.createLinearGradient(0, y - h, 0, y)
+    grad.addColorStop(0, hexAlpha(accent, 0))
+    grad.addColorStop(1, hexAlpha(accent, 0.75 * fade))
+    ctx.fillStyle = grad
+    ctx.fillRect(x - w / 2, y - h, w, h)
+    // White-hot core line.
+    ctx.fillStyle = hexAlpha(PALETTE.white, 0.85 * fade)
+    ctx.fillRect(x - 1, y - h * 0.85, 2, h * 0.85)
+    // Ground bloom where the boss materializes.
+    ctx.globalAlpha = fade
+    const bloom = 14 + 8 * fade
+    ctx.drawImage(glowSprite(accent), x - bloom, y - bloom, bloom * 2, bloom * 2)
+    ctx.restore()
+  }
+
   const drawReticle = (ctx: CanvasRenderingContext2D, enemy: Enemy, accent: string) => {
     const x = enemy.position.x * CELL_SIZE + CELL_SIZE / 2
     const y = enemy.position.y * CELL_SIZE + CELL_SIZE / 2
@@ -2130,7 +2391,7 @@ const GameCanvas = ({
     return <span style={{ color: PALETTE.hpHigh }}>WAVE {gameState?.wave} — READY</span>
   }
 
-  const towerButtons: BaseTowerType[] = ['basic', 'sniper', 'splash', 'slow', 'tesla']
+  const towerButtons = TOWER_ORDER
 
   const isEvolved = selectedTower?.evolved ?? false
   const sellPrice = selectedTower
@@ -2236,7 +2497,7 @@ const GameCanvas = ({
       )}
 
       <div className="tower-selection">
-        {towerButtons.map(type => {
+        {towerButtons.map((type, i) => {
           const cost = TOWER_COSTS[type]
           const canAfford = gold >= cost
           return (
@@ -2246,8 +2507,9 @@ const GameCanvas = ({
               style={{ '--accent': TOWER_COLORS[type] } as React.CSSProperties}
               onClick={() => { setSelectedTowerType(type); setSelectedTower(null) }}
               disabled={isGameOver}
-              title={canAfford ? `Select ${TOWER_NAMES[type]} tower` : `Not enough gold (need ${cost})`}
+              title={`${canAfford ? `Select ${TOWER_NAMES[type]} tower` : `Not enough gold (need ${cost})`} — hotkey ${i + 1}`}
             >
+              <span className="hotkey-hint">{i + 1}</span>
               <TowerIcon type={type} />
               <span>{TOWER_NAMES[type]}</span>
               <span className="cost" style={{ color: canAfford ? PALETTE.gold : PALETTE.danger }}>${cost}</span>
@@ -2258,7 +2520,7 @@ const GameCanvas = ({
           className={`tower-btn tower-btn-none ${selectedTowerType === null ? 'selected' : ''}`}
           onClick={() => { setSelectedTowerType(null); setSelectedTower(null) }}
           disabled={isGameOver}
-          title="Deselect tower — cursor mode"
+          title="Deselect tower — cursor mode (Esc)"
         >
           <span className="none-icon">∅</span>
           <span>None</span>

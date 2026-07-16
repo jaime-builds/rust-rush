@@ -12,6 +12,8 @@
 // handler. Mute state persists in localStorage (same pattern as the high
 // score) and suspends the context entirely, so a muted tab burns no audio CPU.
 
+import { getSettings, subscribeSettings } from '../settings'
+
 const MUTE_KEY = 'rustRushMuted'
 
 const readMuted = (): boolean => {
@@ -48,11 +50,17 @@ class SoundEngine {
     return this.muted
   }
 
+  // audible: the engine makes noise only when BOTH switches allow it — the
+  // settings menu's Sound toggle (settings.sound) and the mute toggle.
+  private audible(): boolean {
+    return !this.muted && getSettings().sound
+  }
+
   // unlock creates (or resumes) the AudioContext and starts the music loop.
   // Must be called from a user-gesture handler the first time; safe to call
   // repeatedly.
   unlock(): void {
-    if (this.muted) return // stay silent (and free) until unmuted
+    if (!this.audible()) return // stay silent (and free) until switched on
     this.ensureContext()
     if (this.ctx && this.ctx.state === 'suspended') {
       void this.ctx.resume()
@@ -64,23 +72,37 @@ class SoundEngine {
   toggleMute(): boolean {
     this.muted = !this.muted
     writeMuted(this.muted)
-    if (this.muted) {
+    this.applyAudibleState()
+    return this.muted
+  }
+
+  // settingsChanged re-applies the audible state after any settings write —
+  // the Sound toggle in the settings menu lands here.
+  settingsChanged(): void {
+    this.applyAudibleState()
+  }
+
+  // applyAudibleState suspends or resumes the context to match audible().
+  // Suspending (not just zeroing gain) means a silenced tab burns no audio CPU.
+  private applyAudibleState(): void {
+    if (!this.audible()) {
       if (this.ctx && this.master) {
         // Short ramp to zero before suspending avoids a hard click.
         this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.02)
         const ctx = this.ctx
         setTimeout(() => {
-          if (this.muted) void ctx.suspend()
+          if (!this.audible()) void ctx.suspend()
         }, 120)
       }
     } else {
+      // Only ever reached from a click handler (mute button or settings
+      // toggle), so creating the AudioContext here satisfies autoplay policy.
       this.ensureContext()
       if (this.ctx && this.master) {
         void this.ctx.resume()
         this.master.gain.setTargetAtTime(1, this.ctx.currentTime, 0.05)
       }
     }
-    return this.muted
   }
 
   // --- The four SFX -------------------------------------------------------
@@ -171,7 +193,7 @@ class SoundEngine {
     this.ctx = new Ctor()
 
     this.master = this.ctx.createGain()
-    this.master.gain.value = this.muted ? 0 : 1
+    this.master.gain.value = this.audible() ? 1 : 0
     this.master.connect(this.ctx.destination)
 
     this.sfxBus = this.ctx.createGain()
@@ -186,7 +208,7 @@ class SoundEngine {
   }
 
   private readyCtx(): AudioContext | null {
-    if (this.muted || !this.ctx || this.ctx.state !== 'running') return null
+    if (!this.audible() || !this.ctx || this.ctx.state !== 'running') return null
     return this.ctx
   }
 
@@ -313,3 +335,8 @@ class SoundEngine {
 
 // Singleton — audio is inherently global to the page.
 export const sound = new SoundEngine()
+
+// React to settings writes (the Sound toggle) without the UI having to know
+// engine internals. Fires on any settings change; a no-op when audibility
+// didn't actually flip.
+subscribeSettings(() => sound.settingsChanged())

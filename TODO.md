@@ -182,20 +182,23 @@
 - [x] Game over sound
 - [x] Mute/volume controls — setting persists across sessions (localStorage, same pattern as high score); simple on/off mute (♪ button in header), no slider
 
-### Phase 19: Visual Polish (largely done July 3 — "NEON IRONLINE" overhaul)
-- [ ] Tower placement animations
+### Phase 19: Visual Polish ✅ (July 3 "NEON IRONLINE" overhaul; remaining items completed July 16 overnight — see SESSION-LOG.md)
+- [x] Tower placement animation — ~180ms scale-up-from-nothing with a slight overshoot, no particles (unconditional, not toggleable — towers place one at a time)
 - [x] Particle effects for hits (spark bursts + additive shockwave rings)
-- [ ] Enemy spawn animation (spawn gate has marching chevrons; per-unit animation still open)
-- [ ] Screen shake on damage
+- [x] Enemy spawn animation — **boss enemies only**, a beam-down effect (narrowing vertical light streak + ground bloom, boss fades in under it, ~0.5s, no particle system). Basic/fast/tank enemies keep the existing spawn-gate chevrons only, no per-unit animation.
+- [x] Screen shake — small/subtle (3.5px, 280ms, quadratic decay), triggers on health loss (goal leaks) only, not on tower hits
+- [x] Faint red pulse — continuous slow ambient edge vignette while health is critical. ⚠️ Spec said "health < 5" but health only moves in −10 steps from 100, so literal <5 is unreachable while alive — implemented as < 50 (= fewer than 5 remaining leaks). One constant (`LOW_HEALTH_PULSE_THRESHOLD` in GameCanvas.tsx) if Jaime wants a different line.
 - [x] Background theme (dark tech board: gradient, grid, bulkheads, vignette, animated portals)
 - [x] Enemy type visual improvements (distinct heading-rotated silhouettes per type)
 
-### Phase 20: UI Improvements
-- [ ] Mini-map
-- [ ] Hotkeys for tower selection (1-4)
-- [ ] Speed controls (1x, 2x, 3x)
-- [ ] Settings menu
-- [ ] Tutorial/help screen
+> Shake/red-pulse/beam-down/sound are individually toggleable via `client/src/settings.ts` (all default ON), surfaced in the Phase 20 settings menu.
+
+### Phase 20: UI Improvements ✅ (scoped July 16, completed July 16 overnight — see SESSION-LOG.md)
+- [ ] ~~Mini-map~~ — **dropped July 16.** Board is fully visible on screen at 20×15; no use case identified.
+- [x] Hotkeys — 1-5 select the five base towers (Pulse/Railgun/Mortar/Stasis/Tesla), Escape deselects to NONE. Guarded against focused text inputs; small key hints on the tower buttons.
+- [x] Speed control — real 1x/2x/3x control + Pause replaces the binary FF toggle. Pause implemented for real server-side: the 60Hz loop keeps ticking but `Update()` early-returns while `Paused`, freezing enemies/projectiles/cooldowns/effects/game-clock exactly in place; `SpawnWave` holds its spawn timers while paused. `set_speed` accepts `{speed: 1|2|3}` (legacy `{fast_forward}` still works).
+- [x] Settings menu — exactly 5 toggles: screen shake, low-health red pulse, boss beam-down, sound (SFX+music), and mute (moved here from the header — header is now DEBUG + speed control + ⚙ SETTINGS). Persists via `rustRushSettings` (one JSON blob) + the existing `rustRushMuted` key.
+- [ ] ~~Tutorial/help screen~~ — **dropped July 16.** Existing glossary covers it; not needed.
 
 ### Phase 21: Public Deployment
 - [ ] Self-host on NinjaUnraid (192.168.0.12) — not a hosting platform (Railway/Fly.io dropped free tiers, Render's free tier cold-starts after 15min idle — bad fit for a WebSocket game)
@@ -211,24 +214,45 @@
   - [ ] Small internal stats UI — later phase, not scoped yet
 - [ ] Share public link
 
-### Phase 22: Multiplayer Features
+### Phase 24: Advanced Features
+- [x] 4-5 built-in map layouts with a map select screen (distinct from map editor/custom maps below — hand-designed/Fable-built, not user-created) — ✅ July 14–15: 6-map registry (Clearway/Switchback/Gauntlet/Crucible/Needle/Pylon Field), per-room selection via `new_game`, NEON select screen. Per-map difficulty variance (path lengths 20–44 cells) flagged, then **playtested and closed July 15–16**: wave 25 + new high score on Clearway (shortest path, expected hardest) — no rebalance needed.
+- ~~Different game modes (endless, timed)~~ — folded into Phase 25 below (endless returns as a post-unlock option, timed dropped)
+- ~~Difficulty settings~~ — folded into Phase 25 below (harder difficulty returns as a post-unlock option, not a freely-selectable preset)
+
+> Map editor and user-created custom maps moved to **Future Enhancements** (see below) — deprioritized July 16.
+
+### Phase 25: Map Progression & Unlocks (design pending — scoped at a high level July 16, needs its own dedicated planning session before a Fable prompt is written)
+
+**The core idea:** each of the 6 maps gets a win condition (survive to a target wave), maps unlock in sequence by beating the previous one, and beating a map unlocks post-game options (Endless, and/or a Harder difficulty with reduced gold-per-kill and boosted boss stats) selectable on that map going forward.
+
+- [ ] Rank the 6 maps into a progression order — **decided against ranking by obstacle count** (Clearway's wave-25 high score run undercuts the "more walls = harder" assumption; obstacle count and path length pull in opposite directions and neither has been isolated yet). Plan instead: have Fable run a real relative-difficulty pass per map (e.g. a fixed tower budget at a fixed wave, or an undefended-run health-drain comparison) and rank off actual measured results, not a guess.
+- [ ] Win-wave targets scale per map (Clearway = wave 25 confirmed as a reasonable first target; later maps scale up — exact numbers pending the difficulty-ranking pass above). The existing compound wave-scaling curve (health 1.10^(wave-5), etc.) likely does most of the difficulty lifting on its own between win targets — map geometry is a secondary flavor variable, not the primary lever.
+- [ ] Maps locked until the previous one is beaten — map-select screen needs a locked/grayed-out state
+- [ ] Hitting the win-wave target stops the run with a **victory screen** (distinct from "Signal Lost"), offering: return to map select, or continue seamlessly in Endless mode on the current map
+- [ ] Beating a map unlocks, on that map going forward: **Endless** (keep playing past the win wave) and a **Harder difficulty** variant (spitballed: reduced gold-per-kill, bosses ~1.5× stronger — exact numbers TBD)
+- [ ] Persistence: `localStorage`, same pattern as the existing high score — no accounts, per-browser, doesn't follow across devices (consistent with the game's existing philosophy, not a new tradeoff)
+
+---
+
+## 🔮 Future Enhancements
+
+Deprioritized July 16, 2026 — moved out of the active roadmap so Phases 19/20/24 (remaining) and tech debt can get finished first. Not abandoned, just not next.
+
+### Multiplayer Features (was Phase 22)
 - [ ] Lobby system
 - [ ] Cooperative mode (shared resources)
 - [ ] Competitive mode
 - [ ] Chat system
 
-### Phase 23: Persistence & Progression
+### Persistence & Progression (was Phase 23)
 - [ ] User accounts
 - [ ] High score leaderboard
 - [ ] Achievements system
 - [ ] Save/load game state
 
-### Phase 24: Advanced Features
-- [x] 4-5 built-in map layouts with a map select screen (distinct from map editor/custom maps below — hand-designed/Fable-built, not user-created) — ✅ July 14–15: 6-map registry (Clearway/Switchback/Gauntlet/Crucible/Needle/Pylon Field), per-room selection via `new_game`, NEON select screen. Per-map difficulty variance (path lengths 20–44 cells) flagged, then **playtested and closed July 15–16**: wave 25 + new high score on Clearway (shortest path, expected hardest) — no rebalance needed.
+### Map Editor & Custom Maps (was part of Phase 24)
 - [ ] Map editor
 - [ ] Custom maps
-- [ ] Different game modes (endless, timed)
-- [ ] Difficulty settings
 
 ---
 
@@ -261,13 +285,13 @@
 
 - [x] Optimize pathfinding for large grids ✅ (July 2 — integer-indexed BFS with parent reconstruction: 47× faster, 294× fewer allocations, byte-identical paths)
 - [x] Reduce WebSocket message size ✅ (July 2 — enemy paths no longer serialized (~27% of snapshot payload); envelope wrapping no longer re-parses the snapshot (~7.7× less JSON CPU))
-- [ ] Add error boundaries in React
-- [ ] Add server-side validation for tower placement (bounds, occupied cells, spawn/goal cells — server currently checks gold only)
+- [x] Add error boundaries in React ✅ (July 16 overnight — `ui/ErrorBoundary.tsx` wraps GameCanvas and the settings menu; a render crash shows an inline fault panel with RETRY instead of blanking the page)
+- [x] Add server-side validation for tower placement ✅ (was already done in the July 3 session — bounds/occupied/wall/spawn/goal/type all checked in `AddTower`; this checkbox was stale)
 - [ ] Rate limiting for actions
 - [ ] Connection recovery on network loss
 - [ ] State synchronization on reconnect
-- [ ] Single-source gameplay constants (tower costs/ranges, enemy glossary are hand-mirrored in the client — consider a server-sent config on join)
-- [ ] Delete or clearly quarantine `game-engine/` (legacy Rust prototype with diverged stats) and `database/` (unused schema)
+- [ ] Single-source gameplay constants (tower costs/ranges, enemy glossary are hand-mirrored in the client — consider a server-sent config on join). *Deliberately skipped July 16 overnight: touches the join flow, per-session risk rule.*
+- [x] Delete `game-engine/` (legacy Rust prototype with diverged stats) and `database/` (unused schema) ✅ (July 16 overnight — both fully deleted, doc references in README/SETUP removed; left unstaged for review)
 
 ---
 
@@ -293,10 +317,10 @@
 
 ### Full Release
 - [ ] Public deployment (shareable link)
-- [ ] Multiplayer
-- [ ] User accounts
-- [ ] Leaderboards
-- [ ] Achievements
+- [ ] Multiplayer *(moved to Future Enhancements — deprioritized July 16)*
+- [ ] User accounts *(moved to Future Enhancements — deprioritized July 16)*
+- [ ] Leaderboards *(moved to Future Enhancements — deprioritized July 16)*
+- [ ] Achievements *(moved to Future Enhancements — deprioritized July 16)*
 - [ ] Mobile responsive
 - [ ] Tutorial
 
@@ -533,5 +557,5 @@ only 1–2 evolutions per run by wave 20. See SESSION-LOG.md for the numbers.
 
 ---
 
-**Last Updated**: July 15, 2026
-**Status**: Phases 18 (sound), 21-prep (Dockerfile/env/stats), and 24-maps (6-map roster + select screen) built overnight July 14–15 ✅ — see SESSION-LOG.md for per-feature detail | Next: review + commit, then actual deployment on NinjaUnraid 🚀
+**Last Updated**: July 16, 2026 (overnight session)
+**Status**: Phase 19 (Visual Polish) and Phase 20 (UI Improvements) ✅ complete; Technical Debt cleaned up (game-engine/ + database/ deleted, React error boundaries added; constants single-sourcing deliberately deferred). See SESSION-LOG.md for details and judgment calls. Remaining active work: Phase 21 (deployment — on-server steps), Phase 25 (Map Progression & Unlocks — needs its own planning session first).

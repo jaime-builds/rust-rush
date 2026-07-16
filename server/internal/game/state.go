@@ -246,6 +246,12 @@ type GameStateWithShooting struct {
 	GameTime         float64       `json:"game_time"`
 	FastForward      bool          `json:"fast_forward"`
 	SpeedMultiplier  float64       `json:"speed_multiplier"`
+	// Paused gates Update() entirely (see the top of Update): enemies,
+	// projectiles, cooldowns, and effects freeze exactly where they are. The
+	// 60 FPS loop keeps ticking and broadcasting the frozen state, so
+	// unpausing resumes from the same frame with no catch-up. Not a speed
+	// value — it composes with SpeedMultiplier (pause at 3x, resume at 3x).
+	Paused bool `json:"paused"`
 	SpawnPoint       *Position     `json:"spawn_point,omitempty"`
 	GoalPoint        *Position     `json:"goal_point,omitempty"`
 	// Obstacles is the static map layout (permanent walls). Shared registry
@@ -346,6 +352,7 @@ func (gs *GameStateWithShooting) resetLocked() {
 	gs.GameTime = 0
 	gs.FastForward = false
 	gs.SpeedMultiplier = 1.0
+	gs.Paused = false
 	gs.nextTowerID = 1
 	gs.nextEnemyID = 1
 	gs.nextProjectileID = 1
@@ -355,6 +362,13 @@ func (gs *GameStateWithShooting) resetLocked() {
 func (gs *GameStateWithShooting) Update(deltaTime float64) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+
+	// Paused freezes everything — including effects, which normally keep
+	// animating through waiting/game_over. GameTime doesn't advance either,
+	// so unpausing resumes the exact frozen state.
+	if gs.Paused {
+		return
+	}
 
 	if gs.Phase == PhaseGameOver || gs.Phase == PhaseWaiting {
 		gs.updateEffects(deltaTime)
@@ -1140,6 +1154,35 @@ func (gs *GameStateWithShooting) SetFastForward(enabled bool) {
 	}
 }
 
+// SetSpeedMultiplier sets the game speed to 1x, 2x, or 3x (anything else is
+// rejected — the client only offers those three). FastForward stays in sync
+// as "faster than realtime" for older snapshot consumers.
+func (gs *GameStateWithShooting) SetSpeedMultiplier(speed float64) bool {
+	if speed != 1.0 && speed != 2.0 && speed != 3.0 {
+		return false
+	}
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	gs.SpeedMultiplier = speed
+	gs.FastForward = speed > 1.0
+	return true
+}
+
+// SetPaused freezes/unfreezes the simulation. The game loop keeps ticking
+// and broadcasting; Update() itself is what's gated (and SpawnWave holds
+// its spawns while paused).
+func (gs *GameStateWithShooting) SetPaused(paused bool) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	gs.Paused = paused
+}
+
+func (gs *GameStateWithShooting) IsPaused() bool {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	return gs.Paused
+}
+
 func (gs *GameStateWithShooting) GetSpeedMultiplier() float64 {
 	gs.mu.RLock()
 	defer gs.mu.RUnlock()
@@ -1186,6 +1229,7 @@ func (gs *GameStateWithShooting) GetSnapshot() *GameStateWithShooting {
 		GameTime:         gs.GameTime,
 		FastForward:      gs.FastForward,
 		SpeedMultiplier:  gs.SpeedMultiplier,
+		Paused:           gs.Paused,
 		SpawnPoint:       gs.SpawnPoint,
 		GoalPoint:        gs.GoalPoint,
 		Obstacles:        gs.mapDef.Obstacles,

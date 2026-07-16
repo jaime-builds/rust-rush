@@ -113,6 +113,7 @@ export interface GameState {
   game_time: number
   fast_forward?: boolean
   speed_multiplier?: number
+  paused?: boolean
   spawn_point?: Position
   goal_point?: Position
   // Static map walls (server-authoritative): enemies path around them,

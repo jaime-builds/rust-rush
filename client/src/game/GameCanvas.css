@@ -722,3 +722,114 @@
   font-style: italic;
   margin: 12px 0 0;
 }
+
+/* ——— Phase 20: hotkey hints on the tower buttons ——— */
+
+.tower-btn {
+  position: relative;
+}
+
+.hotkey-hint {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 0;
+  opacity: 0.7;
+}
+
+/* ——— Phase 20: header speed control + settings modal ——— */
+
+.speed-control {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 4, 10, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20; /* above every in-game overlay */
+}
+
+.settings-box {
+  padding: 26px 30px;
+  min-width: 420px;
+  text-align: left;
+}
+
+.settings-title {
+  color: var(--cyan);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.25em;
+  text-align: center;
+  text-shadow: 0 0 14px rgba(0, 229, 255, 0.4);
+  margin-bottom: 18px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-row-label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--text);
+}
+
+.settings-row-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.settings-toggle {
+  min-width: 58px;
+  padding: 7px 12px;
+}
+
+.settings-close {
+  display: block;
+  margin: 18px auto 0;
+}
+
+/* ——— Error boundary fault panel ——— */
+
+.error-boundary {
+  margin: 24px auto;
+  padding: 26px 34px;
+  max-width: 520px;
+  text-align: center;
+}
+
+.error-boundary-title {
+  color: var(--danger);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  margin-bottom: 10px;
+}
+
+.error-boundary-msg {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-bottom: 16px;
+  word-break: break-word;
+}

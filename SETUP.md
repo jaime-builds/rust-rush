@@ -115,27 +115,21 @@ rust-rush/
 │   └── internal/
 │       ├── game/         # Game state, waves, pathfinding, game loop
 │       └── websocket/    # Hub, client connections, message handlers
-├── client/               # React frontend — rendering and input only
-│   └── src/
-│       ├── App.tsx       # WebSocket wiring, state throttling, debug panel
-│       ├── game/
-│       │   └── GameCanvas.tsx  # Canvas rendering + game UI
-│       ├── hooks/
-│       │   └── useWebSocket.ts # Connection + subscription hook
-│       └── types/
-│           └── game.ts   # Shared types, tower costs, grid constants
-├── game-engine/          # LEGACY — see below
-└── database/             # LEGACY — see below
+└── client/               # React frontend — rendering and input only
+    └── src/
+        ├── App.tsx       # WebSocket wiring, state throttling, debug panel
+        ├── settings.ts   # Effect/audio preferences (localStorage-backed)
+        ├── audio/
+        │   └── sound.ts  # Procedural Web Audio engine (music + SFX)
+        ├── game/
+        │   └── GameCanvas.tsx  # Canvas rendering + game UI
+        ├── hooks/
+        │   └── useWebSocket.ts # Connection + subscription hook
+        ├── types/
+        │   └── game.ts   # Shared types, tower costs, grid constants
+        └── ui/
+            └── SettingsMenu.tsx  # Settings modal (5 toggles)
 ```
-
-## 🗄️ Legacy components
-
-Two directories are early-phase artifacts that the live game does **not** use:
-
-- **`game-engine/`** — a Rust/macroquad prototype from Phase 1-2. The Go server superseded it; its gameplay constants have long diverged from the real ones in `server/internal/game/state.go`. Do not treat it as a spec.
-- **`database/`** — a PostgreSQL schema from Phase 1. No code connects to a database; state is in-memory. Kept only for a possible future persistence phase (see TODO.md Phase 23).
-
-Neither is needed to build, run, or develop the game.
 
 ---
 

@@ -560,3 +560,92 @@ func TestMapSelection(t *testing.T) {
 		t.Errorf("map changed on unknown ID: %q", gs.GetSnapshot().MapID)
 	}
 }
+
+// Pause must freeze the simulation completely — enemies, projectiles,
+// cooldowns, effects, and the game clock — and resume from the same state.
+func TestPauseFreezesUpdate(t *testing.T) {
+	gs := newTestGame()
+	path := gs.FindPathFromSpawn()
+	if path == nil {
+		t.Fatal("no path from spawn")
+	}
+	gs.AddEnemy("basic", path, 1)
+	if !gs.StartWave(0) {
+		t.Fatal("could not start wave")
+	}
+	gs.mu.Lock()
+	gs.Explosions = append(gs.Explosions, Explosion{ID: 1, Position: Position{X: 5, Y: 5}, Duration: 0.3, Radius: 0.5})
+	gs.mu.Unlock()
+
+	gs.Update(1.0 / 60.0)
+	before := gs.GetSnapshot()
+
+	gs.SetPaused(true)
+	for i := 0; i < 60; i++ {
+		gs.Update(1.0 / 60.0)
+	}
+	frozen := gs.GetSnapshot()
+
+	if !frozen.Paused {
+		t.Error("snapshot does not carry Paused=true")
+	}
+	if frozen.Enemies[0].Position != before.Enemies[0].Position {
+		t.Errorf("enemy moved while paused: %v -> %v", before.Enemies[0].Position, frozen.Enemies[0].Position)
+	}
+	if frozen.GameTime != before.GameTime {
+		t.Errorf("game time advanced while paused: %v -> %v", before.GameTime, frozen.GameTime)
+	}
+	if len(frozen.Explosions) != len(before.Explosions) || frozen.Explosions[0].Duration != before.Explosions[0].Duration {
+		t.Error("effects ticked down while paused")
+	}
+
+	// Resume: exactly one tick of movement from the frozen position.
+	gs.SetPaused(false)
+	gs.Update(1.0 / 60.0)
+	after := gs.GetSnapshot()
+	if after.Paused {
+		t.Error("snapshot still Paused after resume")
+	}
+	if after.Enemies[0].Position == frozen.Enemies[0].Position {
+		t.Error("enemy did not resume moving after unpause")
+	}
+	if after.GameTime <= frozen.GameTime {
+		t.Error("game time did not resume after unpause")
+	}
+}
+
+// SetSpeedMultiplier accepts exactly 1/2/3 and keeps FastForward coherent;
+// Reset clears both pause and speed.
+func TestSpeedMultiplierAndReset(t *testing.T) {
+	gs := newTestGame()
+
+	if !gs.SetSpeedMultiplier(2.0) {
+		t.Error("2x rejected")
+	}
+	snap := gs.GetSnapshot()
+	if snap.SpeedMultiplier != 2.0 || !snap.FastForward {
+		t.Errorf("2x: multiplier %v fastforward %v", snap.SpeedMultiplier, snap.FastForward)
+	}
+
+	if gs.SetSpeedMultiplier(5.0) || gs.SetSpeedMultiplier(0) || gs.SetSpeedMultiplier(-1) {
+		t.Error("invalid speed accepted")
+	}
+	if gs.GetSpeedMultiplier() != 2.0 {
+		t.Errorf("invalid speed mutated multiplier: %v", gs.GetSpeedMultiplier())
+	}
+
+	if !gs.SetSpeedMultiplier(1.0) {
+		t.Error("1x rejected")
+	}
+	if gs.GetSnapshot().FastForward {
+		t.Error("FastForward still set at 1x")
+	}
+
+	gs.SetSpeedMultiplier(3.0)
+	gs.SetPaused(true)
+	gs.Reset()
+	snap = gs.GetSnapshot()
+	if snap.Paused || snap.SpeedMultiplier != 1.0 || snap.FastForward {
+		t.Errorf("Reset kept pause/speed: paused %v multiplier %v ff %v", snap.Paused, snap.SpeedMultiplier, snap.FastForward)
+	}
+}

@@ -274,17 +274,20 @@ rust-rush/
 │       └── websocket/
 │           ├── hub.go        # WebSocket broadcast hub
 │           └── client.go     # Client connection & message handlers
-├── client/
-│   └── src/
-│       ├── App.tsx           # WS wiring, UI state throttling, debug panel
-│       ├── game/
-│       │   └── GameCanvas.tsx
-│       ├── hooks/
-│       │   └── useWebSocket.ts
-│       └── types/
-│           └── game.ts       # Shared types, tower costs, grid constants
-├── game-engine/              # LEGACY Rust prototype — unused, stats diverged
-└── database/                 # LEGACY Postgres schema — nothing connects to it
+└── client/
+    └── src/
+        ├── App.tsx           # WS wiring, UI state throttling, debug panel
+        ├── settings.ts       # Effect/audio preferences (localStorage-backed)
+        ├── audio/
+        │   └── sound.ts      # Procedural Web Audio engine (music + SFX)
+        ├── game/
+        │   └── GameCanvas.tsx
+        ├── hooks/
+        │   └── useWebSocket.ts
+        ├── types/
+        │   └── game.ts       # Shared types, tower costs, grid constants
+        └── ui/
+            └── SettingsMenu.tsx  # Settings modal (5 toggles)
 ```
 
 ## 🧪 Testing

@@ -205,6 +205,20 @@ func (m *Manager) SpawnWave(roomID string) {
 				return
 			}
 
+			// Hold spawns while paused — otherwise this goroutine's timers keep
+			// firing and enemies pile up frozen on the spawn cell. Cheap poll,
+			// still cancellable by New Game. (A pause landing mid-delay below
+			// lets the remaining delay elapse first, then holds here — so no
+			// enemy ever spawns into a paused game.)
+			for room.IsPaused() {
+				select {
+				case <-cancel:
+					log.Printf("🛑 Wave %d spawn cancelled while paused (new game)", waveNum)
+					return
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+
 			if path := room.FindPathFromSpawn(); path != nil {
 				room.AddEnemy(group.EnemyType, path, waveNum)
 			} else {

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import GameCanvas from './game/GameCanvas'
+import ErrorBoundary from './ui/ErrorBoundary'
+import SettingsMenu from './ui/SettingsMenu'
 import { useWebSocket } from './hooks/useWebSocket'
 import { GameState } from './types/game'
 import { sound } from './audio/sound'
@@ -41,7 +43,7 @@ function App() {
   const { status, subscribe, sendMessage } = useWebSocket(WS_URL)
   const [hasJoined, setHasJoined] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
-  const [muted, setMuted] = useState(sound.isMuted())
+  const [showSettings, setShowSettings] = useState(false)
   const [gameState, setGameState] = useState<GameState>(defaultGameState)
 
   // Newest server snapshot, updated on every message for the canvas loop.
@@ -230,9 +232,10 @@ function App() {
     })
   }, [hasJoined, sendMessage])
 
-  // Fast forward is server state; deriving it from the snapshot keeps the
-  // button truthful across page reloads mid-game.
-  const fastForward = gameState.fast_forward ?? false
+  // Speed and pause are server state; deriving them from the snapshot keeps
+  // the controls truthful across page reloads mid-game.
+  const speed = gameState.speed_multiplier ?? 1
+  const paused = gameState.paused ?? false
 
   return (
     <div className="App">
@@ -248,21 +251,31 @@ function App() {
           >
             DEBUG
           </button>
+          <span className="speed-control">
+            {[1, 2, 3].map(s => (
+              <button
+                key={s}
+                className={`btn btn-inline ${speed === s ? 'btn-toggled' : ''}`}
+                onClick={() => sendMessage({ type: 'set_speed', room_id: ROOM_ID, payload: { speed: s } })}
+                title={`Run the game at ${s}x speed`}
+              >
+                ×{s}
+              </button>
+            ))}
+            <button
+              className={`btn btn-inline ${paused ? 'btn-toggled' : ''}`}
+              onClick={() => sendMessage({ type: 'pause_game', room_id: ROOM_ID, payload: { paused: !paused } })}
+              title={paused ? 'Resume the game' : 'Pause — freezes everything in place'}
+            >
+              {paused ? '▶' : '⏸'}
+            </button>
+          </span>
           <button
-            className={`btn btn-inline ${fastForward ? 'btn-toggled' : ''}`}
-            onClick={() => {
-              sendMessage({ type: 'set_speed', room_id: ROOM_ID, payload: { fast_forward: !fastForward } })
-            }}
-            title="Fast forward: 3x game speed for testing"
+            className="btn btn-inline"
+            onClick={() => setShowSettings(true)}
+            title="Effect and audio settings"
           >
-            FF ×3: {fastForward ? 'ON' : 'OFF'}
-          </button>
-          <button
-            className={`btn btn-inline ${muted ? '' : 'btn-toggled'}`}
-            onClick={() => setMuted(sound.toggleMute())}
-            title={muted ? 'Sound is muted — click to unmute' : 'Click to mute all sound'}
-          >
-            ♪ {muted ? 'OFF' : 'ON'}
+            ⚙ SETTINGS
           </button>
         </div>
 
@@ -325,8 +338,15 @@ function App() {
         )}
       </header>
 
+      {showSettings && (
+        <ErrorBoundary section="SETTINGS">
+          <SettingsMenu onClose={() => setShowSettings(false)} />
+        </ErrorBoundary>
+      )}
+
       <main>
-        <GameCanvas
+        <ErrorBoundary section="GAME VIEW">
+          <GameCanvas
           isConnected={status.isConnected && hasJoined}
           gameState={gameState}
           liveStateRef={liveStateRef}
@@ -338,7 +358,8 @@ function App() {
           onNewGame={handleNewGame}
           onSpawnEnemy={handleSpawnEnemy}
           showDebug={showDebug}
-        />
+          />
+        </ErrorBoundary>
       </main>
 
       <footer>

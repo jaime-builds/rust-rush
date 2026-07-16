@@ -378,6 +378,17 @@ func (c *Client) handleMessage(msg *Message) {
 		if !exists {
 			return
 		}
+		// New form: {"speed": 1|2|3}. The legacy {"fast_forward": bool} form
+		// (the old binary FF toggle) still works as 1x/3x.
+		if speed, ok := msg.Payload["speed"].(float64); ok {
+			if room.SetSpeedMultiplier(speed) {
+				log.Printf("⏩ Speed set to %.0fx in room %s", speed, roomID)
+				c.hub.BroadcastGameState(roomID)
+			} else {
+				log.Printf("Invalid speed %v from client %s — ignored", speed, c.id)
+			}
+			return
+		}
 		ff, _ := msg.Payload["fast_forward"].(bool)
 		room.SetFastForward(ff)
 		log.Printf("⏩ Fast forward: %v in room %s", ff, roomID)
@@ -437,8 +448,27 @@ func (c *Client) handleMessage(msg *Message) {
 		c.hub.BroadcastGameState(roomID)
 
 	case MessageTypePauseGame:
-		log.Printf("Pause game request from client %s", c.id)
-		// TODO: Pause game logic
+		roomID := msg.RoomID
+		if roomID == "" {
+			roomID = c.roomID
+		}
+		if roomID == "" {
+			return
+		}
+		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
+		if !exists {
+			return
+		}
+		paused, _ := msg.Payload["paused"].(bool)
+		room.SetPaused(paused)
+		if paused {
+			log.Printf("⏸ Game paused in room %s by client %s", roomID, c.id)
+		} else {
+			log.Printf("▶ Game resumed in room %s by client %s", roomID, c.id)
+		}
+		// Broadcast immediately so every client's pause button flips at once
+		// (the 60 Hz loop would also carry it, but this removes the lag).
+		c.hub.BroadcastGameState(roomID)
 
 	default:
 		log.Printf("Unknown message type: %s", msg.Type)
