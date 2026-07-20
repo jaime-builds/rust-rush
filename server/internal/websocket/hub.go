@@ -22,6 +22,9 @@ const (
 	MessageTypePauseGame    = "pause_game"
 	MessageTypeSpawnEnemy   = "spawn_enemy"
 	MessageTypeNewGame      = "new_game"
+	// continue_endless: from the victory phase, keep the current run going
+	// past the win wave (flips the room to Endless; nothing resets).
+	MessageTypeContinueEndless = "continue_endless"
 )
 
 // Message represents a WebSocket message

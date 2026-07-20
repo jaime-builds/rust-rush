@@ -433,19 +433,42 @@ func (c *Client) handleMessage(msg *Message) {
 			return
 		}
 
-		// Optional map selection: new_game may carry a map_id. Unknown or
-		// missing IDs keep the room's current map.
+		// Optional fields: map_id selects the map (unknown/missing keeps the
+		// room's current map), difficulty ("normal"|"harder") and endless
+		// configure the run — both default to normal/false when absent, so
+		// pre-progression clients keep exactly the old behavior.
+		difficulty, _ := msg.Payload["difficulty"].(string)
+		endless, _ := msg.Payload["endless"].(bool)
 		if mapID, ok := msg.Payload["map_id"].(string); ok && mapID != "" {
-			if !room.ResetToMap(mapID) {
+			if !room.ResetToMapWithOptions(mapID, difficulty, endless) {
 				log.Printf("⚠️ Unknown map_id %q from client %s — kept current map", mapID, c.id)
 			} else {
 				log.Printf("🗺️ Room %s switched to map %s", roomID, mapID)
 			}
 		} else {
-			room.Reset()
+			room.ResetToMapWithOptions("", difficulty, endless)
 		}
-		log.Printf("🔄 New game started in room %s", roomID)
+		log.Printf("🔄 New game started in room %s (difficulty=%s endless=%v)", roomID, room.GetSnapshot().Difficulty, endless)
 		c.hub.BroadcastGameState(roomID)
+
+	case MessageTypeContinueEndless:
+		roomID := msg.RoomID
+		if roomID == "" {
+			roomID = c.roomID
+		}
+		if roomID == "" {
+			return
+		}
+		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
+		if !exists {
+			return
+		}
+		if room.ContinueEndless() {
+			log.Printf("♾️ Room %s continuing past the win wave in Endless", roomID)
+			c.hub.BroadcastGameState(roomID)
+		} else {
+			log.Printf("Client %s sent continue_endless outside the victory phase — ignored", c.id)
+		}
 
 	case MessageTypePauseGame:
 		roomID := msg.RoomID

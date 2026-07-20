@@ -14,6 +14,27 @@ const (
 	PhaseWaiting  GamePhase = "waiting"
 	PhaseActive   GamePhase = "active"
 	PhaseGameOver GamePhase = "game_over"
+	// PhaseVictory is the win state: a non-Endless run whose wave counter
+	// reached the map's WinWave. A distinct phase (not a flag on game_over)
+	// so every existing game_over consumer — loss overlay, loss sting, stats
+	// copy — keeps meaning exactly "loss"; a consumer that doesn't know about
+	// victory shows nothing rather than showing a loss screen on a win.
+	PhaseVictory GamePhase = "victory"
+)
+
+// Difficulty variants. Harder is unlocked per-map by beating it (client-side
+// gate); the server just applies the modifiers when asked.
+const (
+	DifficultyNormal = "normal"
+	DifficultyHarder = "harder"
+)
+
+// Harder-difficulty modifiers (confirmed numbers from the Map Progression
+// design doc): −30% gold per kill, ×1.5 boss health, boss speed deliberately
+// unchanged.
+const (
+	harderGoldMult       = 0.7
+	harderBossHealthMult = 1.5
 )
 
 // WaveEnemy defines one enemy entry in a wave definition
@@ -252,6 +273,12 @@ type GameStateWithShooting struct {
 	// unpausing resumes from the same frame with no catch-up. Not a speed
 	// value — it composes with SpeedMultiplier (pause at 3x, resume at 3x).
 	Paused bool `json:"paused"`
+	// Difficulty ("normal" | "harder") and Endless are run-level settings,
+	// both chosen at new_game time. Harder: −30% gold/kill, ×1.5 boss health.
+	// Endless: the WinWave check never fires — the run continues past the
+	// win wave exactly as every run did before win states existed.
+	Difficulty string `json:"difficulty"`
+	Endless    bool   `json:"endless"`
 	SpawnPoint       *Position     `json:"spawn_point,omitempty"`
 	GoalPoint        *Position     `json:"goal_point,omitempty"`
 	// Obstacles is the static map layout (permanent walls). Shared registry
@@ -264,12 +291,15 @@ type GameStateWithShooting struct {
 	// during the waiting phase, the in-flight wave during the active phase.
 	// Only populated on snapshots.
 	WavePreview []WavePreviewEntry `json:"wave_preview,omitempty"`
-	// OnGameOver, when set, fires exactly once per game-over transition (the
-	// game-over branch in Update runs before the phase flips, and Update
-	// early-returns once the phase is game_over). Called on its own goroutine
-	// so slow consumers (the stats DB write) never stall the 60 FPS loop.
+	// OnGameOver, when set, fires exactly once per completed run — at the
+	// FIRST terminal transition, either game over or victory (runRecorded
+	// guards the pair, so a victory that continues into Endless and later
+	// dies doesn't produce a second row). Called on its own goroutine so
+	// slow consumers (the stats DB write) never stall the 60 FPS loop.
 	// Set at room creation, before the game loop starts — never mutated after.
 	OnGameOver func(wave, score int, duration float64) `json:"-"`
+	// runRecorded: OnGameOver already fired for this run (see above).
+	runRecorded bool
 	// mapDef is the room's active map (obstacles + flat lookup grid). Only
 	// swapped under the write lock (ResetToMap); registry defs are immutable.
 	mapDef           *MapDef
@@ -299,6 +329,7 @@ func NewGameStateWithShooting(roomID string) *GameStateWithShooting {
 		Score:            0,
 		Wave:             1,
 		Phase:            PhaseWaiting,
+		Difficulty:       DifficultyNormal,
 		EnemiesRemaining: 0,
 		GameTime:         0,
 		SpeedMultiplier:  1.0,
@@ -321,6 +352,13 @@ func (gs *GameStateWithShooting) Reset() {
 // (the reset still happens); returns whether the ID was recognized. Safe as
 // one atomic step: the map swap and the field wipe share the write lock.
 func (gs *GameStateWithShooting) ResetToMap(mapID string) bool {
+	return gs.ResetToMapWithOptions(mapID, DifficultyNormal, false)
+}
+
+// ResetToMapWithOptions is ResetToMap plus the run-level settings from the
+// new_game message. An unknown difficulty string falls back to normal, same
+// spirit as the unknown-map fallback.
+func (gs *GameStateWithShooting) ResetToMapWithOptions(mapID, difficulty string, endless bool) bool {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	m := GetMapDef(mapID)
@@ -329,6 +367,10 @@ func (gs *GameStateWithShooting) ResetToMap(mapID string) bool {
 		gs.MapID = m.ID
 	}
 	gs.resetLocked()
+	if difficulty == DifficultyHarder {
+		gs.Difficulty = DifficultyHarder
+	}
+	gs.Endless = endless
 	return m != nil
 }
 
@@ -353,6 +395,9 @@ func (gs *GameStateWithShooting) resetLocked() {
 	gs.FastForward = false
 	gs.SpeedMultiplier = 1.0
 	gs.Paused = false
+	gs.Difficulty = DifficultyNormal
+	gs.Endless = false
+	gs.runRecorded = false
 	gs.nextTowerID = 1
 	gs.nextEnemyID = 1
 	gs.nextProjectileID = 1
@@ -370,7 +415,7 @@ func (gs *GameStateWithShooting) Update(deltaTime float64) {
 		return
 	}
 
-	if gs.Phase == PhaseGameOver || gs.Phase == PhaseWaiting {
+	if gs.Phase == PhaseGameOver || gs.Phase == PhaseVictory || gs.Phase == PhaseWaiting {
 		gs.updateEffects(deltaTime)
 		return
 	}
@@ -386,9 +431,7 @@ func (gs *GameStateWithShooting) Update(deltaTime float64) {
 	if gs.Health <= 0 {
 		gs.Health = 0
 		gs.Phase = PhaseGameOver
-		if gs.OnGameOver != nil {
-			go gs.OnGameOver(gs.Wave, gs.Score, gs.GameTime)
-		}
+		gs.fireRunCompleteLocked()
 	}
 
 	if gs.Phase == PhaseActive && len(gs.Enemies) == 0 && gs.EnemiesRemaining == 0 {
@@ -401,7 +444,31 @@ func (gs *GameStateWithShooting) Update(deltaTime float64) {
 		}
 		gs.Score += bonus
 		gs.Wave++
+
+		// Win check, parallel to the game-over check above: the moment the
+		// wave counter reaches the map's WinWave, a non-Endless run is won.
+		// This is "reaching wave N", the same milestone the loss screen and
+		// high-score run count — clear wave N−1 and the counter shows N —
+		// not "clear wave N". Endless runs skip this entirely and keep
+		// playing, exactly as every run did before win states existed.
+		// Update early-returns in the victory phase, so this fires once.
+		if !gs.Endless && gs.mapDef.WinWave > 0 && gs.Wave >= gs.mapDef.WinWave {
+			gs.Phase = PhaseVictory
+			gs.fireRunCompleteLocked()
+		}
 	}
+}
+
+// fireRunCompleteLocked fires OnGameOver at most once per run (both terminal
+// transitions — loss and victory — route through here; a victory continued
+// into Endless that later dies must not produce a second stats row). Caller
+// holds gs.mu.
+func (gs *GameStateWithShooting) fireRunCompleteLocked() {
+	if gs.runRecorded || gs.OnGameOver == nil {
+		return
+	}
+	gs.runRecorded = true
+	go gs.OnGameOver(gs.Wave, gs.Score, gs.GameTime)
 }
 
 func (gs *GameStateWithShooting) updateTowers(deltaTime float64) {
@@ -831,7 +898,12 @@ func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
 		enemy := &gs.Enemies[i]
 
 		if enemy.Health <= 0 {
-			gs.Gold += getEnemyGoldReward(enemy.EnemyType)
+			reward := getEnemyGoldReward(enemy.EnemyType)
+			if gs.Difficulty == DifficultyHarder {
+				// −30%, rounded to nearest: 10→7, 8→6, 25→18, 100→70.
+				reward = int(math.Round(float64(reward) * harderGoldMult))
+			}
+			gs.Gold += reward
 			gs.Score += getEnemyScorePoints(enemy.EnemyType) * enemy.SpawnWave
 			continue
 		}
@@ -1097,6 +1169,12 @@ func (gs *GameStateWithShooting) AddEnemy(enemyType string, path []Position, wav
 	defer gs.mu.Unlock()
 
 	health, speed := ScaledEnemyStats(enemyType, wave)
+	// Harder difficulty: bosses only, health only — speed deliberately
+	// untouched (see the design doc: speed is a map-geometry lever, not a
+	// difficulty-mode lever).
+	if gs.Difficulty == DifficultyHarder && enemyType == "boss" {
+		health *= harderBossHealthMult
+	}
 	enemy := Enemy{
 		ID:        gs.nextEnemyID,
 		Position:  path[0],
@@ -1120,6 +1198,22 @@ func (gs *GameStateWithShooting) DecrementEnemiesRemaining() {
 	if gs.EnemiesRemaining > 0 {
 		gs.EnemiesRemaining--
 	}
+}
+
+// ContinueEndless is the victory screen's CONTINUE (ENDLESS) path: from the
+// victory phase only, flip the run to Endless and drop back to waiting so
+// the next wave (the one after the win wave was reached) can start. Nothing
+// else resets — towers, gold, score, and wave all carry over seamlessly.
+// Returns false (no-op) from any other phase.
+func (gs *GameStateWithShooting) ContinueEndless() bool {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	if gs.Phase != PhaseVictory {
+		return false
+	}
+	gs.Endless = true
+	gs.Phase = PhaseWaiting
+	return true
 }
 
 // StartWave transitions waiting → active and sets the spawn counter. Returns
@@ -1230,6 +1324,8 @@ func (gs *GameStateWithShooting) GetSnapshot() *GameStateWithShooting {
 		FastForward:      gs.FastForward,
 		SpeedMultiplier:  gs.SpeedMultiplier,
 		Paused:           gs.Paused,
+		Difficulty:       gs.Difficulty,
+		Endless:          gs.Endless,
 		SpawnPoint:       gs.SpawnPoint,
 		GoalPoint:        gs.GoalPoint,
 		Obstacles:        gs.mapDef.Obstacles,

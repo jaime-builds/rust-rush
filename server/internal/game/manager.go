@@ -201,7 +201,7 @@ func (m *Manager) SpawnWave(roomID string) {
 			default:
 			}
 
-			if room.GetPhase() == PhaseGameOver {
+			if p := room.GetPhase(); p == PhaseGameOver || p == PhaseVictory {
 				return
 			}
 
