@@ -13,6 +13,7 @@ export type MessageType =
   | 'pause_game' // server-side stub, not implemented
   | 'spawn_enemy'
   | 'new_game'
+  | 'continue_endless' // victory screen: keep the run going past the win wave
 
 export interface WebSocketMessage {
   type: MessageType

@@ -723,6 +723,154 @@
   margin: 12px 0 0;
 }
 
+/* ——— Phase 25: map progression — locked cards, run settings, victory ——— */
+
+.map-card {
+  position: relative; /* anchors the sequence badge and lock glyph */
+}
+
+.map-card.locked {
+  cursor: not-allowed;
+  opacity: 0.45;
+  filter: grayscale(0.8);
+}
+
+.map-card.locked:hover {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.map-card-seq {
+  position: absolute;
+  top: 4px;
+  left: 7px;
+  z-index: 1;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-shadow: 0 0 4px rgba(2, 4, 10, 0.9);
+}
+
+.map-card-lock {
+  position: absolute;
+  top: 26px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 26px;
+  filter: grayscale(1);
+  text-shadow: 0 0 10px rgba(2, 4, 10, 0.95);
+}
+
+.map-card-win {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.map-card-win.secured {
+  color: var(--ok);
+}
+
+.map-select-modes {
+  display: flex;
+  gap: 26px;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.mode-group {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.mode-label {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  margin-right: 4px;
+}
+
+.map-select-objective {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  margin: 0 0 16px;
+}
+
+/* Victory — same layout family as SIGNAL LOST, but unmistakably a win:
+   green/gold where the loss screen is red. */
+.victory-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(3, 12, 7, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.victory-box {
+  padding: 36px 56px;
+  text-align: center;
+  border-color: rgba(53, 245, 140, 0.45);
+  box-shadow: 0 0 30px rgba(53, 245, 140, 0.12) inset, 0 0 24px rgba(53, 245, 140, 0.15);
+}
+
+.victory-title {
+  color: var(--ok);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.25em;
+  text-shadow: 0 0 18px rgba(53, 245, 140, 0.55);
+  margin-bottom: 10px;
+}
+
+.victory-sub {
+  color: var(--text-dim);
+  font-size: 14px;
+  margin: 0 0 10px;
+}
+
+.victory-score {
+  color: var(--gold);
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin: 0 0 6px;
+}
+
+.victory-best {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0 0 24px;
+}
+
+.victory-best.new-best {
+  color: var(--gold);
+}
+
+.victory-box .btn + .btn {
+  margin-left: 10px;
+}
+
+.btn-victory {
+  border-color: rgba(53, 245, 140, 0.6);
+  background: rgba(53, 245, 140, 0.08);
+  color: var(--ok);
+}
+
+.btn-victory:hover:not(:disabled) {
+  border-color: var(--ok);
+  color: #fff;
+  box-shadow: 0 0 14px rgba(53, 245, 140, 0.35);
+}
+
 /* ——— Phase 20: hotkey hints on the tower buttons ——— */
 
 .tower-btn {

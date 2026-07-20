@@ -20,7 +20,11 @@ export type EvolvedTowerType =
   | 'laser' | 'amplifier'         // ← tesla
 export type TowerType = BaseTowerType | EvolvedTowerType
 export type EnemyType = 'basic' | 'fast' | 'tank' | 'flying' | 'boss'
-export type GamePhase = 'waiting' | 'active' | 'game_over'
+// 'victory': a non-Endless run whose wave counter reached the map's win wave.
+export type GamePhase = 'waiting' | 'active' | 'game_over' | 'victory'
+// Run-level settings, chosen at deploy time (Harder/Endless unlock per map
+// by beating it).
+export type Difficulty = 'normal' | 'harder'
 
 export interface Tower {
   id: number
@@ -114,6 +118,9 @@ export interface GameState {
   fast_forward?: boolean
   speed_multiplier?: number
   paused?: boolean
+  // Run settings echoed by the server (set via new_game / continue_endless).
+  difficulty?: Difficulty
+  endless?: boolean
   spawn_point?: Position
   goal_point?: Position
   // Static map walls (server-authoritative): enemies path around them,
@@ -153,6 +160,12 @@ export interface GameMapInfo {
   id: string
   name: string
   tagline: string
+  // Progression chain position (1-6) and the wave a non-Endless run must
+  // reach to win — mirrored from server MapDef (map.go), kept in sync by
+  // hand like everything else in this file. A map is selectable when its
+  // sequenceOrder ≤ furthest-beaten + 1 (see readFurthestBeaten).
+  sequenceOrder: number
+  winWave: number
   obstacles: Position[]
 }
 
@@ -167,28 +180,41 @@ const block = (x0: number, y0: number, x1: number, y1: number): Position[] => {
 }
 
 export const GAME_MAPS: GameMapInfo[] = [
-  { id: 'open', name: 'THE CLEARWAY', tagline: 'No cover. No excuses.', obstacles: [] },
+  {
+    id: 'open', name: 'THE CLEARWAY', tagline: 'No cover. No excuses.',
+    sequenceOrder: 1, winWave: 25, obstacles: [],
+  },
   {
     id: 'switchback', name: 'THE SWITCHBACK', tagline: 'Three bulkheads, one long S-route.',
+    sequenceOrder: 2, winWave: 35,
     obstacles: [...vwall(4, 0, 10), ...vwall(9, 4, 14), ...vwall(15, 0, 10)],
   },
   {
     id: 'gauntlet', name: 'THE GAUNTLET', tagline: 'One straight canyon. Line the walls.',
+    sequenceOrder: 4, winWave: 35,
     obstacles: [...hwall(5, 3, 16), ...hwall(9, 3, 16)],
   },
   {
     id: 'crucible', name: 'THE CRUCIBLE', tagline: 'A central island. Flip the flow around it.',
+    sequenceOrder: 6, winWave: 50,
     obstacles: block(8, 5, 11, 9),
   },
   {
     id: 'needle', name: 'THE NEEDLE', tagline: 'Every hostile files through one cell.',
+    sequenceOrder: 3, winWave: 35,
     obstacles: [...vwall(10, 0, 6), ...vwall(10, 8, 14)],
   },
   {
     id: 'pylons', name: 'THE PYLON FIELD', tagline: 'Scattered hard cover. Build your own maze.',
+    sequenceOrder: 5, winWave: 50,
     obstacles: [
       ...block(3, 2, 4, 3), ...block(3, 11, 4, 12), ...block(8, 6, 9, 7),
       ...block(11, 2, 12, 3), ...block(11, 11, 12, 12), ...block(15, 6, 16, 7),
     ],
   },
 ]
+
+// The progression chain: GAME_MAPS in sequence order (1-6). The map-select
+// screen renders this so the unlock chain reads left-to-right.
+export const GAME_MAPS_BY_SEQUENCE: GameMapInfo[] =
+  [...GAME_MAPS].sort((a, b) => a.sequenceOrder - b.sequenceOrder)

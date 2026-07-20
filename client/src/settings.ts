@@ -1,11 +1,13 @@
-// Player-facing effect/audio preferences — one JSON blob in localStorage
-// (same persistence pattern as rustRushHighScore/rustRushMuted, combined into
-// a single key since the toggles ship and change together).
+// Player-facing effect preferences — one JSON blob in localStorage (same
+// persistence pattern as rustRushHighScore/rustRushMuted, combined into a
+// single key since the toggles ship and change together).
 //
 // The canvas render loop reads flags straight off `settings.current` every
 // frame (plain property reads, no React), while the settings menu subscribes
 // for re-renders. Mute is NOT here — it lives in sound.ts under its own
-// pre-existing rustRushMuted key.
+// pre-existing rustRushMuted key, and is the sole audio on/off switch (a
+// separate "Sound" toggle here was removed July 16 — it duplicated mute
+// exactly, since the engine only played when both were on).
 
 const SETTINGS_KEY = 'rustRushSettings'
 
@@ -16,15 +18,12 @@ export interface GameSettings {
   lowHealthPulse: boolean
   /** Beam-down materialize effect on boss spawns. */
   bossBeamDown: boolean
-  /** Master switch for the Phase 18 audio system (SFX + music together). */
-  sound: boolean
 }
 
 const DEFAULTS: GameSettings = {
   screenShake: true,
   lowHealthPulse: true,
   bossBeamDown: true,
-  sound: true,
 }
 
 const read = (): GameSettings => {
@@ -33,7 +32,8 @@ const read = (): GameSettings => {
     if (!raw) return { ...DEFAULTS }
     const parsed = JSON.parse(raw) as Partial<Record<keyof GameSettings, unknown>>
     // Merge over defaults so new toggles added later default ON for
-    // players with an older saved blob.
+    // players with an older saved blob (and so an old blob's now-removed
+    // "sound" key is simply ignored, not an error).
     const merged = { ...DEFAULTS }
     for (const key of Object.keys(DEFAULTS) as (keyof GameSettings)[]) {
       if (typeof parsed[key] === 'boolean') merged[key] = parsed[key] as boolean

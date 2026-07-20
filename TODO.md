@@ -180,7 +180,7 @@
 - [x] Evolve confirm sound
 - [x] Wave start sound
 - [x] Game over sound
-- [x] Mute/volume controls — setting persists across sessions (localStorage, same pattern as high score); simple on/off mute (♪ button in header), no slider
+- [x] Mute/volume controls — setting persists across sessions (localStorage, same pattern as high score); simple on/off mute (♪ button, now in the settings menu — see Phase 20), no slider
 
 ### Phase 19: Visual Polish ✅ (July 3 "NEON IRONLINE" overhaul; remaining items completed July 16 overnight — see SESSION-LOG.md)
 - [x] Tower placement animation — ~180ms scale-up-from-nothing with a slight overshoot, no particles (unconditional, not toggleable — towers place one at a time)
@@ -191,13 +191,13 @@
 - [x] Background theme (dark tech board: gradient, grid, bulkheads, vignette, animated portals)
 - [x] Enemy type visual improvements (distinct heading-rotated silhouettes per type)
 
-> Shake/red-pulse/beam-down/sound are individually toggleable via `client/src/settings.ts` (all default ON), surfaced in the Phase 20 settings menu.
+> Shake/red-pulse/beam-down are individually toggleable via `client/src/settings.ts` (all default ON), surfaced in the Phase 20 settings menu. Sound is toggled via the mute control (see Phase 20).
 
 ### Phase 20: UI Improvements ✅ (scoped July 16, completed July 16 overnight — see SESSION-LOG.md)
 - [ ] ~~Mini-map~~ — **dropped July 16.** Board is fully visible on screen at 20×15; no use case identified.
 - [x] Hotkeys — 1-5 select the five base towers (Pulse/Railgun/Mortar/Stasis/Tesla), Escape deselects to NONE. Guarded against focused text inputs; small key hints on the tower buttons.
 - [x] Speed control — real 1x/2x/3x control + Pause replaces the binary FF toggle. Pause implemented for real server-side: the 60Hz loop keeps ticking but `Update()` early-returns while `Paused`, freezing enemies/projectiles/cooldowns/effects/game-clock exactly in place; `SpawnWave` holds its spawn timers while paused. `set_speed` accepts `{speed: 1|2|3}` (legacy `{fast_forward}` still works).
-- [x] Settings menu — exactly 5 toggles: screen shake, low-health red pulse, boss beam-down, sound (SFX+music), and mute (moved here from the header — header is now DEBUG + speed control + ⚙ SETTINGS). Persists via `rustRushSettings` (one JSON blob) + the existing `rustRushMuted` key.
+- [x] Settings menu — 4 toggles: screen shake, low-health red pulse, boss beam-down, and ♪ sound (music + SFX together, moved here from the header — header is now DEBUG + speed control + ⚙ SETTINGS). Persists via `rustRushSettings` (one JSON blob) + the existing `rustRushMuted` key. A separate 5th "Sound" toggle originally shipped alongside mute, duplicating it exactly (both gated the identical audio output) — caught and removed same day; mute is now the sole audio control.
 - [ ] ~~Tutorial/help screen~~ — **dropped July 16.** Existing glossary covers it; not needed.
 
 ### Phase 21: Public Deployment
@@ -221,16 +221,19 @@
 
 > Map editor and user-created custom maps moved to **Future Enhancements** (see below) — deprioritized July 16.
 
-### Phase 25: Map Progression & Unlocks (design pending — scoped at a high level July 16, needs its own dedicated planning session before a Fable prompt is written)
+### Phase 25: Map Progression & Unlocks — ✅ built, reviewed, and fully playtested July 16 — ready to commit
 
-**The core idea:** each of the 6 maps gets a win condition (survive to a target wave), maps unlock in sequence by beating the previous one, and beating a map unlocks post-game options (Endless, and/or a Harder difficulty with reduced gold-per-kill and boosted boss stats) selectable on that map going forward.
+**The core idea:** each of the 6 maps gets a win condition (survive to a target wave), maps unlock **one at a time in a single fixed sequence** by beating the previous one, and beating a map unlocks post-game options (Endless, and/or a Harder difficulty) selectable on that map going forward.
 
-- [ ] Rank the 6 maps into a progression order — **decided against ranking by obstacle count** (Clearway's wave-25 high score run undercuts the "more walls = harder" assumption; obstacle count and path length pull in opposite directions and neither has been isolated yet). Plan instead: have Fable run a real relative-difficulty pass per map (e.g. a fixed tower budget at a fixed wave, or an undefended-run health-drain comparison) and rank off actual measured results, not a guess.
-- [ ] Win-wave targets scale per map (Clearway = wave 25 confirmed as a reasonable first target; later maps scale up — exact numbers pending the difficulty-ranking pass above). The existing compound wave-scaling curve (health 1.10^(wave-5), etc.) likely does most of the difficulty lifting on its own between win targets — map geometry is a secondary flavor variable, not the primary lever.
-- [ ] Maps locked until the previous one is beaten — map-select screen needs a locked/grayed-out state
-- [ ] Hitting the win-wave target stops the run with a **victory screen** (distinct from "Signal Lost"), offering: return to map select, or continue seamlessly in Endless mode on the current map
-- [ ] Beating a map unlocks, on that map going forward: **Endless** (keep playing past the win wave) and a **Harder difficulty** variant (spitballed: reduced gold-per-kill, bosses ~1.5× stronger — exact numbers TBD)
-- [ ] Persistence: `localStorage`, same pattern as the existing high score — no accounts, per-browser, doesn't follow across devices (consistent with the game's existing philosophy, not a new tradeoff)
+- [x] Order all 6 maps into a single 1-6 sequence — **decided via measured simulation** (`map_difficulty_sim_test.go`, identical fixed-budget bot build on every map): Clearway (25) → Switchback (35) → Needle (35) → Gauntlet (35) → Pylon Field (50) → Crucible (50). Full reasoning in SESSION-LOG.md.
+- [x] Win-wave targets confirmed: 25 / 35 / 35 / 35 / 50 / 50 — wired as `WinWave` on `MapDef`
+- [x] Single fixed sequence — `SequenceOrder` on `MapDef`, `localStorage` "furthest map beaten" integer (`rustRushFurthestMapBeaten`), locked map cards render dimmed with a padlock in sequence order
+- [x] Victory screen — "ZONE SECURED", green/gold, CONTINUE (ENDLESS) / MAP SELECT, new `victory` phase server-side
+- [x] Harder difficulty — gold per kill −30%, boss health ×1.5, boss speed unchanged; NORMAL/HARDER + SURVIVAL/ENDLESS toggles on the map-select screen for beaten maps
+- [x] Build — done, verified end-to-end (7 new Go tests + 30-check Playwright browser pass)
+- [x] **Jaime's live playtest — full checklist, all confirmed:** fresh-state locks, ZONE SECURED display, CONTINUE (ENDLESS) seamless carry-over, Endless-then-death correctly shows SIGNAL LOST (not a second victory), map unlock progression, HARDER difficulty (lower gold, tougher bosses), unlock persistence across reload, REDEPLOY carrying HARDER forward
+- [x] Sound/mute toggle redundancy caught during playtest and fixed same day (see Phase 20)
+- [ ] Not yet committed — ready whenever Jaime runs `git add`/`commit`/`push`
 
 ---
 
@@ -557,5 +560,5 @@ only 1–2 evolutions per run by wave 20. See SESSION-LOG.md for the numbers.
 
 ---
 
-**Last Updated**: July 16, 2026 (overnight session)
-**Status**: Phase 19 (Visual Polish) and Phase 20 (UI Improvements) ✅ complete; Technical Debt cleaned up (game-engine/ + database/ deleted, React error boundaries added; constants single-sourcing deliberately deferred). See SESSION-LOG.md for details and judgment calls. Remaining active work: Phase 21 (deployment — on-server steps), Phase 25 (Map Progression & Unlocks — needs its own planning session first).
+**Last Updated**: July 16, 2026 (Jaime's full playtest + sound/mute redundancy fix)
+**Status**: Phase 25 (Map Progression & Unlocks) ✅ built, reviewed, and fully playtested — ready to commit. After commit, next up is Phase 21 (actual deployment — on-server work on NinjaUnraid).

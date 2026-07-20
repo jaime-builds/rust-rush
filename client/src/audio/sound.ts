@@ -11,8 +11,11 @@
 // gesture, so nothing is created until unlock() is called from a pointer/key
 // handler. Mute state persists in localStorage (same pattern as the high
 // score) and suspends the context entirely, so a muted tab burns no audio CPU.
-
-import { getSettings, subscribeSettings } from '../settings'
+//
+// Mute is the sole audio on/off switch (settings menu's ♪ SOUND row calls
+// toggleMute()). A separate "Sound" flag in the effects settings blob was
+// removed July 16 — it gated audible() alongside mute, so the two switches
+// did exactly the same thing with no state where they differed.
 
 const MUTE_KEY = 'rustRushMuted'
 
@@ -50,10 +53,10 @@ class SoundEngine {
     return this.muted
   }
 
-  // audible: the engine makes noise only when BOTH switches allow it — the
-  // settings menu's Sound toggle (settings.sound) and the mute toggle.
+  // audible: the engine makes noise unless muted. (Previously also checked
+  // a settings.sound flag — removed, see the file header.)
   private audible(): boolean {
-    return !this.muted && getSettings().sound
+    return !this.muted
   }
 
   // unlock creates (or resumes) the AudioContext and starts the music loop.
@@ -76,12 +79,6 @@ class SoundEngine {
     return this.muted
   }
 
-  // settingsChanged re-applies the audible state after any settings write —
-  // the Sound toggle in the settings menu lands here.
-  settingsChanged(): void {
-    this.applyAudibleState()
-  }
-
   // applyAudibleState suspends or resumes the context to match audible().
   // Suspending (not just zeroing gain) means a silenced tab burns no audio CPU.
   private applyAudibleState(): void {
@@ -95,8 +92,8 @@ class SoundEngine {
         }, 120)
       }
     } else {
-      // Only ever reached from a click handler (mute button or settings
-      // toggle), so creating the AudioContext here satisfies autoplay policy.
+      // Only ever reached from a click handler (the mute button), so
+      // creating the AudioContext here satisfies autoplay policy.
       this.ensureContext()
       if (this.ctx && this.master) {
         void this.ctx.resume()
@@ -335,8 +332,3 @@ class SoundEngine {
 
 // Singleton — audio is inherently global to the page.
 export const sound = new SoundEngine()
-
-// React to settings writes (the Sound toggle) without the UI having to know
-// engine internals. Fires on any settings change; a no-op when audibility
-// didn't actually flip.
-subscribeSettings(() => sound.settingsChanged())

@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import './GameCanvas.css'
 import {
   Tower, TowerType, BaseTowerType, EvolvedTowerType, Enemy, EnemyType, Projectile,
-  MuzzleFlash, Explosion, Arc, Position, GameState,
+  MuzzleFlash, Explosion, Arc, Position, GameState, Difficulty,
   TOWER_COSTS, EVOLUTION_OPTIONS, GRID_WIDTH, GRID_HEIGHT, CELL_SIZE,
-  GAME_MAPS, GameMapInfo,
+  GAME_MAPS, GAME_MAPS_BY_SEQUENCE, GameMapInfo,
 } from '../types/game'
 import { settings } from '../settings'
 
@@ -212,6 +212,22 @@ const readHighScore = (): number => {
   try {
     const parsed = parseInt(localStorage.getItem(HIGH_SCORE_KEY) ?? '0', 10)
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+  } catch {
+    return 0
+  }
+}
+
+// Map progression unlock state: the single "furthest map beaten" integer
+// (0 = nothing beaten, only sequence position 1 selectable; 6 = everything
+// beaten). Same localStorage pattern as the high score. A map is selectable
+// when its sequenceOrder ≤ furthest-beaten + 1.
+const FURTHEST_BEATEN_KEY = 'rustRushFurthestMapBeaten'
+
+const readFurthestBeaten = (): number => {
+  try {
+    const parsed = parseInt(localStorage.getItem(FURTHEST_BEATEN_KEY) ?? '0', 10)
+    if (!Number.isFinite(parsed)) return 0
+    return Math.min(Math.max(parsed, 0), GAME_MAPS.length)
   } catch {
     return 0
   }
@@ -524,8 +540,11 @@ interface GameCanvasProps {
   onUpgradeTower: (towerId: number) => void
   onEvolveTower: (towerId: number, evolution: string) => void
   onStartWave: () => void
-  // Starts a fresh run; mapId switches the room's map (omit = same map).
-  onNewGame: (mapId?: string) => void
+  // Starts a fresh run; mapId switches the room's map (omit = same map),
+  // difficulty/endless configure the run (omit = normal survival).
+  onNewGame: (mapId?: string, difficulty?: Difficulty, endless?: boolean) => void
+  // Victory screen: continue the current run past the win wave in Endless.
+  onContinueEndless: () => void
   onSpawnEnemy?: () => void
   gameState?: GameState
   // Newest snapshot, updated on every server message (60/sec). The canvas
@@ -543,6 +562,7 @@ const GameCanvas = ({
   onEvolveTower,
   onStartWave,
   onNewGame,
+  onContinueEndless,
   onSpawnEnemy,
   gameState,
   liveStateRef,
@@ -586,10 +606,15 @@ const GameCanvas = ({
   const [showGlossary, setShowGlossary] = useState(false)
   const [glossaryTab, setGlossaryTab] = useState<'towers' | 'enemies'>('towers')
   // Map selection: happens before a game starts (auto-opens on a fresh
-  // board, or via NEW GAME / CHANGE MAP). Never mid-game.
+  // board, or via NEW GAME / CHANGE MAP / MAP SELECT). Never mid-game.
   const [showMapSelect, setShowMapSelect] = useState(false)
   const [pendingMapId, setPendingMapId] = useState<string>(GAME_MAPS[0].id)
   const mapSelectAutoOpenedRef = useRef(false)
+  // Progression: furthest map beaten (localStorage) plus the run settings
+  // picked on the map-select screen for an already-beaten map.
+  const [furthestBeaten, setFurthestBeaten] = useState<number>(() => readFurthestBeaten())
+  const [pendingDifficulty, setPendingDifficulty] = useState<Difficulty>('normal')
+  const [pendingEndless, setPendingEndless] = useState(false)
 
   // Sync refs (game state itself arrives via liveStateRef at full rate)
   hoveredCellRef.current = hoveredCell
@@ -600,6 +625,10 @@ const GameCanvas = ({
   const gold = gameState?.gold ?? 200
   const isWaveActive = phase === 'active'
   const isGameOver = phase === 'game_over'
+  const isVictory = phase === 'victory'
+  // Both terminal phases halt the run identically — victory differs only in
+  // which overlay it shows and where the run can go next.
+  const isRunOver = isGameOver || isVictory
 
   // Auto-open the map selector once, on joining a fresh board (nothing
   // placed, wave 1, waiting). Rejoining a game in progress skips it.
@@ -615,13 +644,43 @@ const GameCanvas = ({
   }, [isConnected, gameState, phase])
 
   const openMapSelect = () => {
-    setPendingMapId(gameState?.map_id ?? GAME_MAPS[0].id)
+    // Default to the room's current map — unless it's locked (possible if
+    // localStorage was cleared while the room sits on a later map), in which
+    // case fall back to the next map in the chain.
+    const current = GAME_MAPS.find(m => m.id === gameState?.map_id)
+    const fallback = GAME_MAPS_BY_SEQUENCE[Math.min(furthestBeaten, GAME_MAPS.length - 1)]
+    setPendingMapId(current && current.sequenceOrder <= furthestBeaten + 1 ? current.id : fallback.id)
+    // Seed the run-settings toggles from the current run so reopening the
+    // screen doesn't silently drop back to normal survival.
+    setPendingDifficulty(gameState?.difficulty === 'harder' ? 'harder' : 'normal')
+    setPendingEndless(gameState?.endless ?? false)
     setShowMapSelect(true)
   }
 
+  // Progression unlock: on the transition into victory, the beaten map
+  // advances the chain — but only when it was exactly the next map in line
+  // (beating an earlier map again, or an out-of-sequence state from edited
+  // localStorage, can never corrupt the counter).
+  const prevVictoryRef = useRef(false)
+  useEffect(() => {
+    if (isVictory && !prevVictoryRef.current) {
+      const beaten = GAME_MAPS.find(m => m.id === gameState?.map_id)
+      if (beaten && beaten.sequenceOrder === furthestBeaten + 1) {
+        const next = beaten.sequenceOrder
+        setFurthestBeaten(next)
+        try {
+          localStorage.setItem(FURTHEST_BEATEN_KEY, String(next))
+        } catch {
+          // localStorage unavailable (private mode) — unlocks just won't persist
+        }
+      }
+    }
+    prevVictoryRef.current = isVictory
+  }, [isVictory, gameState?.map_id, furthestBeaten])
+
   // Auto wave countdown logic
   useEffect(() => {
-    if (!autoWave || isWaveActive || isGameOver || !isConnected) return
+    if (!autoWave || isWaveActive || isRunOver || !isConnected) return
 
     setCountdown(5)
     const tick = setInterval(() => {
@@ -638,19 +697,23 @@ const GameCanvas = ({
 
     countdownRef.current = tick
     return () => clearInterval(tick)
-  }, [autoWave, isWaveActive, isGameOver, isConnected, onStartWave])
+  }, [autoWave, isWaveActive, isRunOver, isConnected, onStartWave])
 
-  // Clear countdown if wave starts manually or game over
+  // Clear countdown if wave starts manually or the run ends
   useEffect(() => {
-    if (isWaveActive || isGameOver) {
+    if (isWaveActive || isRunOver) {
       if (countdownRef.current) clearInterval(countdownRef.current)
       setCountdown(null)
     }
-  }, [isWaveActive, isGameOver])
+  }, [isWaveActive, isRunOver])
 
-  // Persist high score on the transition into game over
+  // Persist high score on the transition into either terminal phase — a win
+  // ends the run with a final score exactly like a loss does (and a victory
+  // continued into Endless can still set a higher one at its eventual loss).
   useEffect(() => {
-    if (phase === 'game_over' && prevPhaseRef.current !== 'game_over') {
+    const isTerminal = phase === 'game_over' || phase === 'victory'
+    const wasTerminal = prevPhaseRef.current === 'game_over' || prevPhaseRef.current === 'victory'
+    if (isTerminal && !wasTerminal) {
       const finalScore = gameState?.score ?? 0
       if (finalScore > highScore) {
         setHighScore(finalScore)
@@ -663,9 +726,10 @@ const GameCanvas = ({
       } else {
         setIsNewHighScore(false)
       }
-    } else if (phase !== 'game_over' && prevPhaseRef.current === 'game_over') {
-      // Clear on leaving game over so a later, lower-scoring run can't paint
-      // a stale "New High Score!" frame before the effect re-evaluates.
+    } else if (!isTerminal && wasTerminal) {
+      // Clear on leaving the terminal phase so a later, lower-scoring run
+      // can't paint a stale "New High Score!" frame before the effect
+      // re-evaluates.
       setIsNewHighScore(false)
     }
     prevPhaseRef.current = phase
@@ -700,7 +764,7 @@ const GameCanvas = ({
       if (e.ctrlKey || e.metaKey || e.altKey) return
       const el = e.target as HTMLElement | null
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
-      if (isGameOver) return
+      if (isRunOver) return
       // While the settings modal is open, Escape belongs to it (close wins
       // over deselect) and number keys shouldn't reach the board either.
       if (document.querySelector('.settings-overlay')) return
@@ -716,7 +780,7 @@ const GameCanvas = ({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isGameOver])
+  }, [isRunOver])
 
   // Any change of selection resets a half-finished evolve confirmation.
   const selectedTowerId = selectedTower?.id
@@ -756,7 +820,7 @@ const GameCanvas = ({
     const currentExplosions = gs?.explosions || []
     const currentGold = gs?.gold ?? 200
     const currentPhase = gs?.phase || 'waiting'
-    const currentIsGameOver = currentPhase === 'game_over'
+    const currentIsGameOver = currentPhase === 'game_over' || currentPhase === 'victory'
     const nowMs = performance.now()
     const t = nowMs / 1000
 
@@ -2322,7 +2386,7 @@ const GameCanvas = ({
   const handleMouseLeave = () => setHoveredCell(null)
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isGameOver) return
+    if (isRunOver) return
     // Use the click's own coordinates — the hover ref lags one render behind
     // and a fast move+click would act on the previous cell.
     const hovered = cellFromEvent(e)
@@ -2379,7 +2443,7 @@ const GameCanvas = ({
   }
 
   const waveStatusLabel = () => {
-    if (isGameOver) return null
+    if (isRunOver) return null
     if (isWaveActive) {
       const alive = gameState?.enemies.length ?? 0
       const remaining = gameState?.enemies_remaining ?? 0
@@ -2414,6 +2478,7 @@ const GameCanvas = ({
             <div className="game-over-title">SIGNAL LOST</div>
             <p className="game-over-sub">
               You survived {(gameState?.wave ?? 1) - 1} wave{(gameState?.wave ?? 1) - 1 !== 1 ? 's' : ''}
+              {gameState?.difficulty === 'harder' && ' — HARDER'}
             </p>
             <p className="game-over-score">SCORE {(gameState?.score ?? 0).toLocaleString()}</p>
             {isNewHighScore ? (
@@ -2421,7 +2486,10 @@ const GameCanvas = ({
             ) : (
               <p className="game-over-best">BEST {highScore.toLocaleString()}</p>
             )}
-            <button onClick={() => onNewGame()} className="btn btn-primary btn-big">
+            <button
+              onClick={() => onNewGame(undefined, gameState?.difficulty, gameState?.endless)}
+              className="btn btn-primary btn-big"
+            >
               REDEPLOY ▸
             </button>
             <button onClick={openMapSelect} className="btn btn-big">
@@ -2431,35 +2499,120 @@ const GameCanvas = ({
         </div>
       )}
 
-      {showMapSelect && (
+      {isVictory && !showMapSelect && (
+        <div className="victory-overlay">
+          <div className="victory-box panel">
+            <div className="victory-title">ZONE SECURED</div>
+            <p className="victory-sub">
+              {GAME_MAPS.find(m => m.id === gameState?.map_id)?.name ?? 'ZONE'} held to wave{' '}
+              {gameState?.wave ?? 0}{gameState?.difficulty === 'harder' && ' — HARDER'}
+            </p>
+            <p className="victory-score">SCORE {(gameState?.score ?? 0).toLocaleString()}</p>
+            {isNewHighScore ? (
+              <p className="victory-best new-best">★ NEW HIGH SCORE ★</p>
+            ) : (
+              <p className="victory-best">BEST {highScore.toLocaleString()}</p>
+            )}
+            <button onClick={onContinueEndless} className="btn btn-victory btn-big">
+              CONTINUE (ENDLESS) ▸
+            </button>
+            <button onClick={openMapSelect} className="btn btn-big">
+              MAP SELECT
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showMapSelect && (() => {
+        const pendingMap = GAME_MAPS.find(m => m.id === pendingMapId)
+        const pendingBeaten = (pendingMap?.sequenceOrder ?? 99) <= furthestBeaten
+        // Run settings only exist for beaten maps — an unbeaten map always
+        // deploys as normal survival, whatever the toggles last said.
+        const deployDifficulty: Difficulty = pendingBeaten ? pendingDifficulty : 'normal'
+        const deployEndless = pendingBeaten ? pendingEndless : false
+        return (
         <div className="map-select-overlay">
           <div className="map-select-box panel">
             <div className="map-select-title">SELECT DEPLOYMENT ZONE</div>
             <div className="map-select-grid">
-              {GAME_MAPS.map(m => (
-                <button
-                  key={m.id}
-                  className={`map-card ${pendingMapId === m.id ? 'selected' : ''}`}
-                  onClick={() => setPendingMapId(m.id)}
-                  title={m.tagline}
-                >
-                  <MapThumb map={m} />
-                  <span className="map-card-name">
-                    {m.name}
-                    {gameState?.map_id === m.id && <span className="map-card-current"> ● ACTIVE</span>}
-                  </span>
-                  <span className="map-card-tag">{m.tagline}</span>
-                </button>
-              ))}
+              {GAME_MAPS_BY_SEQUENCE.map(m => {
+                const locked = m.sequenceOrder > furthestBeaten + 1
+                const beaten = m.sequenceOrder <= furthestBeaten
+                return (
+                  <button
+                    key={m.id}
+                    className={`map-card ${pendingMapId === m.id ? 'selected' : ''} ${locked ? 'locked' : ''}`}
+                    onClick={() => setPendingMapId(m.id)}
+                    disabled={locked}
+                    title={locked ? 'Secure the previous zone to unlock' : m.tagline}
+                  >
+                    <span className="map-card-seq">{String(m.sequenceOrder).padStart(2, '0')}</span>
+                    <MapThumb map={m} />
+                    {locked && <span className="map-card-lock" aria-label="locked">🔒</span>}
+                    <span className="map-card-name">
+                      {m.name}
+                      {!locked && gameState?.map_id === m.id && <span className="map-card-current"> ● ACTIVE</span>}
+                    </span>
+                    <span className="map-card-tag">
+                      {locked ? 'SECURE PREVIOUS ZONE TO UNLOCK' : m.tagline}
+                    </span>
+                    <span className={`map-card-win ${beaten ? 'secured' : ''}`}>
+                      {beaten ? '✓ SECURED · ' : ''}WIN: WAVE {m.winWave}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
+            {pendingBeaten ? (
+              <div className="map-select-modes">
+                <span className="mode-group">
+                  <span className="mode-label">DIFFICULTY</span>
+                  <button
+                    className={`btn btn-inline ${deployDifficulty === 'normal' ? 'btn-toggled' : ''}`}
+                    onClick={() => setPendingDifficulty('normal')}
+                  >
+                    NORMAL
+                  </button>
+                  <button
+                    className={`btn btn-inline ${deployDifficulty === 'harder' ? 'btn-toggled' : ''}`}
+                    onClick={() => setPendingDifficulty('harder')}
+                    title="−30% gold per kill, bosses ×1.5 health"
+                  >
+                    HARDER
+                  </button>
+                </span>
+                <span className="mode-group">
+                  <span className="mode-label">MODE</span>
+                  <button
+                    className={`btn btn-inline ${!deployEndless ? 'btn-toggled' : ''}`}
+                    onClick={() => setPendingEndless(false)}
+                    title={`Win by reaching wave ${pendingMap?.winWave}`}
+                  >
+                    SURVIVAL
+                  </button>
+                  <button
+                    className={`btn btn-inline ${deployEndless ? 'btn-toggled' : ''}`}
+                    onClick={() => setPendingEndless(true)}
+                    title="No win wave — hold out as long as you can"
+                  >
+                    ENDLESS
+                  </button>
+                </span>
+              </div>
+            ) : (
+              <p className="map-select-objective">
+                OBJECTIVE: REACH WAVE {pendingMap?.winWave ?? '—'} — beating a zone unlocks the
+                next one, plus HARDER and ENDLESS on this zone.
+              </p>
+            )}
             <div className="map-select-actions">
               <button
                 className="btn btn-primary btn-big"
                 onClick={() => {
-                  onNewGame(pendingMapId)
+                  onNewGame(pendingMapId, deployDifficulty, deployEndless)
                   setShowMapSelect(false)
                 }}
-                disabled={!isConnected}
+                disabled={!isConnected || !pendingMap || pendingMap.sequenceOrder > furthestBeaten + 1}
               >
                 DEPLOY ▸
               </button>
@@ -2468,7 +2621,8 @@ const GameCanvas = ({
             <p className="map-select-warn">Deploying starts a fresh run on the selected map.</p>
           </div>
         </div>
-      )}
+        )
+      })()}
 
       <div className="game-info panel">
         <div className="info-item"><span className="label">Gold</span><span className="value gold">${gold}</span></div>
@@ -2476,7 +2630,11 @@ const GameCanvas = ({
         <div className="info-item"><span className="label">Score</span><span className="value">{(gameState?.score ?? 0).toLocaleString()}</span></div>
         <div className="info-item"><span className="label">Best</span><span className="value">{highScore.toLocaleString()}</span></div>
         <div className="info-item"><span className="label">Wave</span><span className="value">{String(gameState?.wave ?? 1).padStart(2, '0')}</span></div>
-        <div className="info-item"><span className="label">Zone</span><span className="value">{GAME_MAPS.find(m => m.id === (gameState?.map_id ?? 'open'))?.name ?? '—'}</span></div>
+        <div className="info-item"><span className="label">Zone</span><span className="value">
+          {GAME_MAPS.find(m => m.id === (gameState?.map_id ?? 'open'))?.name ?? '—'}
+          {gameState?.difficulty === 'harder' && ' · HARDER'}
+          {gameState?.endless && ' · ENDLESS'}
+        </span></div>
         <div className="info-item"><span className="label">Link</span><span className={`value ${isConnected ? 'connected' : 'disconnected'}`}>{isConnected ? 'ONLINE' : 'OFFLINE'}</span></div>
       </div>
 
@@ -2484,7 +2642,7 @@ const GameCanvas = ({
         {waveStatusLabel()}
       </div>
 
-      {!isGameOver && (gameState?.wave_preview?.length ?? 0) > 0 && (
+      {!isRunOver && (gameState?.wave_preview?.length ?? 0) > 0 && (
         <div className="wave-preview panel">
           <span className="label">{isWaveActive ? 'THIS WAVE' : 'NEXT WAVE'}</span>
           {gameState!.wave_preview!.map(entry => (
@@ -2506,7 +2664,7 @@ const GameCanvas = ({
               className={`tower-btn ${selectedTowerType === type ? 'selected' : ''} ${!canAfford ? 'cannot-afford' : ''}`}
               style={{ '--accent': TOWER_COLORS[type] } as React.CSSProperties}
               onClick={() => { setSelectedTowerType(type); setSelectedTower(null) }}
-              disabled={isGameOver}
+              disabled={isRunOver}
               title={`${canAfford ? `Select ${TOWER_NAMES[type]} tower` : `Not enough gold (need ${cost})`} — hotkey ${i + 1}`}
             >
               <span className="hotkey-hint">{i + 1}</span>
@@ -2519,7 +2677,7 @@ const GameCanvas = ({
         <button
           className={`tower-btn tower-btn-none ${selectedTowerType === null ? 'selected' : ''}`}
           onClick={() => { setSelectedTowerType(null); setSelectedTower(null) }}
-          disabled={isGameOver}
+          disabled={isRunOver}
           title="Deselect tower — cursor mode (Esc)"
         >
           <span className="none-icon">∅</span>
@@ -2631,7 +2789,7 @@ const GameCanvas = ({
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
           onClick={handleClick}
-          style={{ cursor: isGameOver ? 'default' : 'crosshair', display: 'block' }}
+          style={{ cursor: isRunOver ? 'default' : 'crosshair', display: 'block' }}
         />
       </div>
 
@@ -2639,7 +2797,7 @@ const GameCanvas = ({
         <button
           className="btn btn-primary"
           onClick={handleStartWave}
-          disabled={!isConnected || isWaveActive || isGameOver || countdown !== null}
+          disabled={!isConnected || isWaveActive || isRunOver || countdown !== null}
           title={isWaveActive ? 'Wave already in progress' : 'Start the next wave'}
         >
           {isWaveActive ? 'WAVE ACTIVE…' : 'START WAVE ▸'}
@@ -2655,7 +2813,7 @@ const GameCanvas = ({
               return !prev
             })
           }}
-          disabled={isGameOver}
+          disabled={isRunOver}
           title="Automatically start next wave after 5 seconds"
         >
           AUTO: {autoWave ? 'ON' : 'OFF'}

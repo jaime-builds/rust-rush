@@ -4,7 +4,7 @@ import GameCanvas from './game/GameCanvas'
 import ErrorBoundary from './ui/ErrorBoundary'
 import SettingsMenu from './ui/SettingsMenu'
 import { useWebSocket } from './hooks/useWebSocket'
-import { GameState } from './types/game'
+import { Difficulty, GameState } from './types/game'
 import { sound } from './audio/sound'
 
 // Dev: Vite serves the client on 5173, Go server runs separately on 8080.
@@ -210,16 +210,29 @@ function App() {
   }, [hasJoined, sendMessage])
 
   // mapId (optional) selects the map for the fresh run; omitted = keep the
-  // room's current map.
-  const handleNewGame = useCallback((mapId?: string) => {
+  // room's current map. difficulty/endless configure the run (both optional;
+  // the server defaults to normal survival when absent) — REDEPLOY passes
+  // the dying run's settings through so a Harder run redeploys as Harder.
+  const handleNewGame = useCallback((mapId?: string, difficulty?: Difficulty, endless?: boolean) => {
     if (!hasJoined) return
+    const payload: Record<string, unknown> = {}
+    if (mapId) payload.map_id = mapId
+    if (difficulty) payload.difficulty = difficulty
+    if (endless !== undefined) payload.endless = endless
     sendMessage({
       type: 'new_game',
       room_id: ROOM_ID,
-      ...(mapId ? { payload: { map_id: mapId } } : {}),
+      ...(Object.keys(payload).length ? { payload } : {}),
     })
     liveStateRef.current = defaultGameState
     setGameState(defaultGameState)
+  }, [hasJoined, sendMessage])
+
+  // Victory screen: continue the same run past the win wave in Endless.
+  // No local state reset — the run carries on from exactly where it is.
+  const handleContinueEndless = useCallback(() => {
+    if (!hasJoined) return
+    sendMessage({ type: 'continue_endless', room_id: ROOM_ID })
   }, [hasJoined, sendMessage])
 
   // Debug-panel helper: the server computes the spawn path itself.
@@ -356,6 +369,7 @@ function App() {
           onEvolveTower={handleEvolveTower}
           onStartWave={handleStartWave}
           onNewGame={handleNewGame}
+          onContinueEndless={handleContinueEndless}
           onSpawnEnemy={handleSpawnEnemy}
           showDebug={showDebug}
           />
