@@ -221,7 +221,7 @@
 
 > Map editor and user-created custom maps moved to **Future Enhancements** (see below) — deprioritized July 16.
 
-### Phase 25: Map Progression & Unlocks — ✅ built, reviewed, and fully playtested July 16 — ready to commit
+### Phase 25: Map Progression & Unlocks — ✅ built, reviewed, fully playtested, and committed July 16
 
 **The core idea:** each of the 6 maps gets a win condition (survive to a target wave), maps unlock **one at a time in a single fixed sequence** by beating the previous one, and beating a map unlocks post-game options (Endless, and/or a Harder difficulty) selectable on that map going forward.
 
@@ -233,7 +233,7 @@
 - [x] Build — done, verified end-to-end (7 new Go tests + 30-check Playwright browser pass)
 - [x] **Jaime's live playtest — full checklist, all confirmed:** fresh-state locks, ZONE SECURED display, CONTINUE (ENDLESS) seamless carry-over, Endless-then-death correctly shows SIGNAL LOST (not a second victory), map unlock progression, HARDER difficulty (lower gold, tougher bosses), unlock persistence across reload, REDEPLOY carrying HARDER forward
 - [x] Sound/mute toggle redundancy caught during playtest and fixed same day (see Phase 20)
-- [ ] Not yet committed — ready whenever Jaime runs `git add`/`commit`/`push`
+- [x] Committed and pushed July 16, along with the sound/mute fix and the README/TODO/vault documentation refresh
 
 ---
 
@@ -560,5 +560,5 @@ only 1–2 evolutions per run by wave 20. See SESSION-LOG.md for the numbers.
 
 ---
 
-**Last Updated**: July 16, 2026 (Jaime's full playtest + sound/mute redundancy fix)
-**Status**: Phase 25 (Map Progression & Unlocks) ✅ built, reviewed, and fully playtested — ready to commit. After commit, next up is Phase 21 (actual deployment — on-server work on NinjaUnraid).
+**Last Updated**: July 16, 2026 (Phase 25 committed)
+**Status**: Phase 25 (Map Progression & Unlocks) ✅ built, reviewed, fully playtested, and committed. Sound/mute redundancy fix and README/TODO/vault doc refresh committed alongside it. **Next up: Phase 21 (actual deployment — on-server work on NinjaUnraid).** That's the last item before this project reaches Jaime's "temporarily done" milestone.

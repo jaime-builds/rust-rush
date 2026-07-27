@@ -1,3 +1,4 @@
+// Entry point for the Rust Rush server: wires up the game manager, stats store, WebSocket hub, and HTTP routes, then listens.
 package main
 
 import (

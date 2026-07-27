@@ -1,3 +1,4 @@
+// Client entry point: mounts the React app into #root and loads global styles.
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.tsx'
