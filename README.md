@@ -7,6 +7,8 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 ![React](https://img.shields.io/badge/react-18+-61DAFB.svg)
 ![TypeScript](https://img.shields.io/badge/typescript-5.0+-3178C6.svg)
 
+**🎮 [Play now: rust-rush.jaime.build](https://rust-rush.jaime.build)** — self-hosted, live as of July 30, 2026
+
 ## 🎮 Features
 
 ### ✅ Fully Implemented (Beta Complete!)
@@ -177,7 +179,6 @@ far more time on target per enemy.
 | 11+   | Full mix + bosses every wave (one more boss every 3rd wave, max 6), counts scale quadratically |
 
 ### 🚧 Coming Next
-- Public deployment (self-hosted, on-server work not tracked in this repo)
 - Small internal stats dashboard (the `/stats` endpoint already exists)
 - Special stat display in upgrade panel (slow duration, splash radius)
 
@@ -242,8 +243,9 @@ go run main.go
 
 > Also available: a multi-stage `Dockerfile` at the repo root, ready for
 > self-hosting (`STATS_DB`/`ALLOWED_ORIGINS`/`PORT` env vars, all with sane
-> defaults). Actual deployment (Caddy, Cloudflare Tunnel, DNS) is on-server
-> work not tracked in this repo.
+> defaults). This is exactly what's running in production — self-hosted on
+> NinjaUnraid, live at https://rust-rush.jaime.build. The Caddy/Tunnel/DNS
+> setup itself is on-server work not tracked in this repo.
 
 ### Development mode (hot reload)
 
@@ -419,7 +421,6 @@ cd server && go run main.go
 ## 🚀 Future Plans
 
 ### Short Term
-- Actual public deployment (self-hosted, on-server work)
 - Special stat display in upgrade panel
 - Small internal stats dashboard
 
@@ -451,4 +452,4 @@ MIT License
 
 ---
 
-**Built with** 🐹 Go and ⚛️ React | **Status**: Beta Complete ✅ — sound, visual polish, speed/pause controls, settings menu, and full map progression & unlocks all shipped | **Last Updated**: July 16, 2026
+**Built with** 🐹 Go and ⚛️ React | **Status**: Beta Complete ✅ — sound, visual polish, speed/pause controls, settings menu, full map progression & unlocks, and live self-hosted deployment all shipped | **Last Updated**: July 30, 2026

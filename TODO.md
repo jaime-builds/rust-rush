@@ -200,19 +200,19 @@
 - [x] Settings menu — 4 toggles: screen shake, low-health red pulse, boss beam-down, and ♪ sound (music + SFX together, moved here from the header — header is now DEBUG + speed control + ⚙ SETTINGS). Persists via `rustRushSettings` (one JSON blob) + the existing `rustRushMuted` key. A separate 5th "Sound" toggle originally shipped alongside mute, duplicating it exactly (both gated the identical audio output) — caught and removed same day; mute is now the sole audio control.
 - [ ] ~~Tutorial/help screen~~ — **dropped July 16.** Existing glossary covers it; not needed.
 
-### Phase 21: Public Deployment
-- [ ] Self-host on NinjaUnraid (192.168.0.12) — not a hosting platform (Railway/Fly.io dropped free tiers, Render's free tier cold-starts after 15min idle — bad fit for a WebSocket game)
+### Phase 21: Public Deployment ✅ shipped July 30, 2026
+- [x] Self-host on NinjaUnraid (192.168.0.12) — not a hosting platform (Railway/Fly.io dropped free tiers, Render's free tier cold-starts after 15min idle — bad fit for a WebSocket game)
 - [x] Dockerize the Go server, `pull_policy: never` pattern (matches ytplayer/ledgerview) — multi-stage `Dockerfile` at repo root, built + smoke-tested July 14–15; compose service example in the Dockerfile header
-- [ ] Caddy site block + Cloudflare Tunnel route — `rust-rush.jaime.build` (on-server work, not in repo)
+- [x] Caddy site block + Cloudflare Tunnel route — `rust-rush.jaime.build` (on-server work, not in repo)
 - [x] Configure environment variables (port, CORS origin) — `PORT`, `STATS_DB`, `ALLOWED_ORIGINS` (+ existing `STATIC_DIR`), all with dev defaults
 - [x] Update WebSocket URL to production endpoint (already derived from `window.location` in prod builds, per Phase 16)
-- [ ] Deploy and verify WebSocket connections work over the tunnel
+- [x] Deploy and verify WebSocket connections work over the tunnel
 - [x] Basic stats/metrics (private, no accounts/names): ✅ July 14–15
   - [x] SQLite file next to the server, one row per completed game (timestamp, wave reached, final score, duration), written on the `game_over` phase transition — pure-Go driver (`modernc.org/sqlite`), path via `STATS_DB`
   - [x] Concurrent player count from the existing hub client map (no new tracking needed)
   - [x] Internal `/stats` JSON endpoint (not linked publicly) — concurrent players, total games, wave distribution, top 10 scores
   - [ ] Small internal stats UI — later phase, not scoped yet
-- [ ] Share public link
+- [x] Share public link — live at `https://rust-rush.jaime.build`
 
 ### Phase 24: Advanced Features
 - [x] 4-5 built-in map layouts with a map select screen (distinct from map editor/custom maps below — hand-designed/Fable-built, not user-created) — ✅ July 14–15: 6-map registry (Clearway/Switchback/Gauntlet/Crucible/Needle/Pylon Field), per-room selection via `new_game`, NEON select screen. Per-map difficulty variance (path lengths 20–44 cells) flagged, then **playtested and closed July 15–16**: wave 25 + new high score on Clearway (shortest path, expected hardest) — no rebalance needed.
@@ -319,7 +319,7 @@ Deprioritized July 16, 2026 — moved out of the active roadmap so Phases 19/20/
 - [x] Local production build (one terminal) ✅
 
 ### Full Release
-- [ ] Public deployment (shareable link)
+- [x] Public deployment (shareable link) ✅ July 30, 2026 — live at `rust-rush.jaime.build`
 - [ ] Multiplayer *(moved to Future Enhancements — deprioritized July 16)*
 - [ ] User accounts *(moved to Future Enhancements — deprioritized July 16)*
 - [ ] Leaderboards *(moved to Future Enhancements — deprioritized July 16)*
@@ -560,5 +560,5 @@ only 1–2 evolutions per run by wave 20. See SESSION-LOG.md for the numbers.
 
 ---
 
-**Last Updated**: July 16, 2026 (Phase 25 committed)
-**Status**: Phase 25 (Map Progression & Unlocks) ✅ built, reviewed, fully playtested, and committed. Sound/mute redundancy fix and README/TODO/vault doc refresh committed alongside it. **Next up: Phase 21 (actual deployment — on-server work on NinjaUnraid).** That's the last item before this project reaches Jaime's "temporarily done" milestone.
+**Last Updated**: July 30, 2026 (Phase 21 deployment shipped)
+**Status**: Phase 21 (Public Deployment) ✅ fully shipped — live at `https://rust-rush.jaime.build`, WebSocket verified working through the Cloudflare Tunnel, Uptime Kuma monitoring active. This was the last item before Jaime's "temporarily done" milestone. **The project has now reached that milestone.**

@@ -128,7 +128,7 @@ rust-rush/
         ├── types/
         │   └── game.ts   # Shared types, tower costs, grid constants
         └── ui/
-            └── SettingsMenu.tsx  # Settings modal (5 toggles)
+            └── SettingsMenu.tsx  # Settings modal (4 toggles)
 ```
 
 ---
