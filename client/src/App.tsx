@@ -378,6 +378,9 @@ function App() {
 
       <footer>
         <p>🦀 Rust Rush - Built with Go 🐹 and React ⚛️</p>
+        {/* Plain link, not a client-side route: the admin UI is a separate
+            tree mounted by main.tsx, so a full navigation is the point. */}
+        <p><a className="footer-admin" href="/admin/login">Admin</a></p>
       </footer>
     </div>
   )

@@ -66,3 +66,17 @@ footer {
 footer p {
   margin: 0;
 }
+
+/* Deliberately quiet — the stats page is for the operator, not for players. */
+.footer-admin {
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 0.85em;
+  opacity: 0.55;
+  transition: color .15s, opacity .15s;
+}
+
+.footer-admin:hover {
+  color: var(--cyan);
+  opacity: 1;
+}

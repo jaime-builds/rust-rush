@@ -17,12 +17,19 @@
 #       - /mnt/user/appdata/rust-rush:/data
 #     environment:
 #       - ALLOWED_ORIGINS=https://rust-rush.jaime.build
+#       - ADMIN_USERNAME=<from secrets>
+#       - ADMIN_PASSWORD=<from secrets>
 #
-# Env vars (all optional, sensible dev defaults):
+# Env vars:
 #   PORT             listen port                      (default 8080)
 #   STATIC_DIR       client build dir                 (set to /app/client/dist here)
 #   STATS_DB         SQLite stats file                (set to /data/stats.db here)
 #   ALLOWED_ORIGINS  comma-separated WS origins       (default: allow all)
+#   ADMIN_USERNAME   admin login user                 (no default — unset closes /stats)
+#   ADMIN_PASSWORD   admin login password             (no default — unset closes /stats)
+#
+# ADMIN_* have no fallback on purpose: leaving them unset locks the stats page
+# rather than shipping a guessable pair. /health stays public either way.
 
 # --- Stage 1: client ---------------------------------------------------------
 FROM node:22-alpine AS client

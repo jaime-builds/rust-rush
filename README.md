@@ -77,7 +77,8 @@ A high-performance tower defense game built with Go, React, and WebSockets.
 - **WebSocket Communication** — Real-time bidirectional state updates
 - **Canvas Ref Pattern** — Animation loop reads from refs, never stale closures
 - **Spawn Cancellation** — New Game instantly stops any running wave goroutine
-- **Private stats** — SQLite-backed, no accounts or player names; one row per completed game (wave, score, duration) plus an internal `/stats` endpoint (concurrent players, totals, wave distribution, top scores) — not linked from the game itself
+- **Private stats** — SQLite-backed, no accounts or player names; one row per completed game (wave, score, duration) plus an internal `/stats` endpoint (concurrent players, totals, wave distribution, top scores)
+- **Admin stats page** — `/admin/login` + `/admin/stats`, gated by a single operator credential pair from `ADMIN_USERNAME` / `ADMIN_PASSWORD` and an HTTP-only session cookie. Still no accounts system: one login, no user table. Reached from a quiet "Admin" link in the game footer
 - **Debug Panel** — Toggleable panel with tower stats, enemy health, and phase info
 
 ### Tower Types
@@ -179,7 +180,6 @@ far more time on target per enemy.
 | 11+   | Full mix + bosses every wave (one more boss every 3rd wave, max 6), counts scale quadratically |
 
 ### 🚧 Coming Next
-- Small internal stats dashboard (the `/stats` endpoint already exists)
 - Special stat display in upgrade panel (slow duration, splash radius)
 
 ## 🏗️ Architecture
@@ -316,9 +316,11 @@ rust-rush/
 ├── README.md / TODO.md / SETUP.md   # Docs live at the repo root
 ├── Dockerfile                 # Multi-stage build, ready for self-hosting
 ├── server/
-│   ├── main.go                # Entry point: WebSocket + static serving + /stats
+│   ├── main.go                # Entry point: WebSocket + static serving + /stats + /admin
 │   ├── e2e_test.go            # End-to-end WebSocket game flow test
 │   └── internal/
+│       ├── admin/
+│       │   └── admin.go       # Single-operator login, session cookie, /stats gate
 │       ├── game/
 │       │   ├── state.go       # Game state, towers, enemies, wave config, win/victory
 │       │   ├── manager.go     # Game loop, wave spawner
@@ -340,10 +342,14 @@ rust-rush/
         ├── hooks/
         │   └── useWebSocket.ts
         ├── types/
-        │   └── game.ts        # Shared types, tower costs, map data, grid constants
+        │   ├── game.ts        # Shared types, tower costs, map data, grid constants
+        │   └── stats.ts       # /stats payload shape + admin route paths
         └── ui/
+            ├── AdminApp.tsx      # /admin router (pathname-based, no router dep)
+            ├── AdminLogin.tsx    # Login form → POST /admin/login
+            ├── AdminStats.tsx    # Stats dashboard + logout
             ├── SettingsMenu.tsx  # Settings modal (4 toggles: shake/pulse/beam-down/sound)
-            └── ErrorBoundary.tsx # Wraps the game view and settings menu
+            └── ErrorBoundary.tsx # Wraps the game view, settings menu, and admin pages
 ```
 
 ## 🧪 Testing
@@ -416,13 +422,12 @@ cd server && go run main.go
 ## 🐛 Known Issues
 
 - Special upgrade stats (slow duration, splash radius) not shown in the tower info panel
-- No small stats dashboard yet (the `/stats` JSON endpoint exists but isn't surfaced in any UI)
+- Admin sessions live in server memory, so a restart logs the operator out
 
 ## 🚀 Future Plans
 
 ### Short Term
 - Special stat display in upgrade panel
-- Small internal stats dashboard
 
 ### Medium Term
 - Different game modes beyond Endless

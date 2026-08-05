@@ -63,7 +63,25 @@ Open **http://localhost:5173**.
 ```bash
 curl http://localhost:8080/health
 ```
-Returns `OK`.
+Returns `OK`. This endpoint is public and unauthenticated on purpose — the uptime monitor and the container healthcheck both poll it.
+
+### Admin stats page
+Set both credential vars before starting the server (there are no defaults — leave them unset and the stats page stays locked):
+```bash
+ADMIN_USERNAME=youruser ADMIN_PASSWORD=yourpassword go run main.go
+```
+Then open **http://localhost:8080/admin/login** (or use the small "Admin" link in the game footer). Signing in redirects to `/admin/stats`.
+
+`/stats` itself is gated by the same session cookie:
+```bash
+curl -i http://localhost:8080/stats                       # 401 unauthorized
+curl -i -c jar -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"youruser","password":"yourpassword"}' \
+  http://localhost:8080/admin/login                       # 204 + session cookie
+curl -b jar http://localhost:8080/stats                   # 200 + JSON
+```
+
+> In dev mode the Vite server proxies `/stats` and the admin API to the Go server on 8080, so the session cookie stays same-origin. The Go server must be running alongside Vite for login to work.
 
 ### Server tests
 ```bash
@@ -113,11 +131,14 @@ rust-rush/
 │   ├── main.go           # Entry point: WebSocket + static file serving
 │   ├── e2e_test.go       # End-to-end WebSocket game flow test
 │   └── internal/
+│       ├── admin/        # Single-operator login + session gate for /stats
 │       ├── game/         # Game state, waves, pathfinding, game loop
+│       ├── stats/        # Private SQLite stats store + /stats handler
 │       └── websocket/    # Hub, client connections, message handlers
 └── client/               # React frontend — rendering and input only
     └── src/
         ├── App.tsx       # WebSocket wiring, state throttling, debug panel
+        ├── main.tsx      # Mounts the game, or the admin UI for /admin/*
         ├── settings.ts   # Effect/audio preferences (localStorage-backed)
         ├── audio/
         │   └── sound.ts  # Procedural Web Audio engine (music + SFX)
@@ -126,8 +147,10 @@ rust-rush/
         ├── hooks/
         │   └── useWebSocket.ts # Connection + subscription hook
         ├── types/
-        │   └── game.ts   # Shared types, tower costs, grid constants
+        │   ├── game.ts   # Shared types, tower costs, grid constants
+        │   └── stats.ts  # /stats payload shape + admin route paths
         └── ui/
+            ├── AdminApp.tsx      # /admin router + login/stats pages
             └── SettingsMenu.tsx  # Settings modal (4 toggles)
 ```
 
