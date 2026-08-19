@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './GameCanvas.css'
 import {
   Tower, TowerType, BaseTowerType, EvolvedTowerType, Enemy, EnemyType, Projectile,
-  MuzzleFlash, Explosion, Arc, Position, GameState, Difficulty,
+  MuzzleFlash, Explosion, Arc, Position, GameState, Difficulty, PlacementCheckStore,
   TOWER_COSTS, EVOLUTION_OPTIONS, GRID_WIDTH, GRID_HEIGHT, CELL_SIZE,
   GAME_MAPS, GAME_MAPS_BY_SEQUENCE, GameMapInfo,
 } from '../types/game'
@@ -546,6 +546,12 @@ interface GameCanvasProps {
   // Victory screen: continue the current run past the win wave in Endless.
   onContinueEndless: () => void
   onSpawnEnemy?: () => void
+  // Asks the server whether a tower on this cell would seal the lane. Fired
+  // once per newly hovered buildable cell; the reply lands in
+  // placementChecksRef.
+  onCheckPlacement: (x: number, y: number) => void
+  // Shared with App, which writes the check_placement replies into it.
+  placementChecksRef: React.MutableRefObject<PlacementCheckStore>
   gameState?: GameState
   // Newest snapshot, updated on every server message (60/sec). The canvas
   // draws from this so it stays smooth while the React tree re-renders at
@@ -553,6 +559,12 @@ interface GameCanvasProps {
   liveStateRef: React.MutableRefObject<GameState>
   showDebug?: boolean
 }
+
+// Where a hovered cell stands with the server's path-block check: 'ok' =
+// cleared (or never asked, because a synchronous check already rejected it),
+// 'pending' = asked, no answer yet, 'blocks' = the placement would seal the
+// only spawn→goal route.
+type PathPreviewState = 'ok' | 'pending' | 'blocks'
 
 const GameCanvas = ({
   isConnected,
@@ -564,6 +576,8 @@ const GameCanvas = ({
   onNewGame,
   onContinueEndless,
   onSpawnEnemy,
+  onCheckPlacement,
+  placementChecksRef,
   gameState,
   liveStateRef,
   showDebug,
@@ -603,6 +617,8 @@ const GameCanvas = ({
   const [highScore, setHighScore] = useState<number>(() => readHighScore())
   const [isNewHighScore, setIsNewHighScore] = useState(false)
   const prevPhaseRef = useRef<string>('waiting')
+  // Tower-id list the cached path-block answers were computed against.
+  const placementLayoutKeyRef = useRef<string | null>(null)
   const [showGlossary, setShowGlossary] = useState(false)
   const [glossaryTab, setGlossaryTab] = useState<'towers' | 'enemies'>('towers')
   // Map selection: happens before a game starts (auto-opens on a fresh
@@ -656,6 +672,77 @@ const GameCanvas = ({
     setPendingEndless(gameState?.endless ?? false)
     setShowMapSelect(true)
   }
+
+  // ——— placement path-block preview ———
+  //
+  // The server owns the rule (AddTower returns path_blocked), so the client
+  // asks before the click rather than guessing: one check_placement per
+  // newly hovered buildable cell, answers cached per cell in
+  // placementChecksRef.
+  //
+  // towerLayoutKey versions that cache. Whether a cell seals the lane
+  // depends on every other tower on the board, so a single placement or
+  // sale invalidates every cached answer — including "safe" ones, which can
+  // turn into "blocks" and back. Tower IDs are a monotonic counter and a
+  // tower never moves, so the id list identifies the layout exactly. It is
+  // derived from the throttled gameState rather than liveStateRef so it is
+  // a plain reactive dependency; the ~100 ms lag only means the ghost sits
+  // in its pending state a beat longer after a placement.
+  const towerLayoutKey = (gameState?.towers ?? []).map(tw => tw.id).join(',')
+  // Primitives, not the object: hoveredCell is deduped by cell in
+  // handleMouseMove, but destructuring keeps the dependency statically
+  // checkable. -1 stands in for "nothing hovered".
+  const hoverX = hoveredCell?.x ?? -1
+  const hoverY = hoveredCell?.y ?? -1
+
+  // Asks about one cell unless it is already answered or already in flight.
+  // Shared by the hover effect and the click, so a click on a cell that was
+  // never hovered (cursor already parked on the canvas at load) seeds the
+  // check instead of going nowhere twice.
+  const requestPlacementCheck = useCallback((x: number, y: number) => {
+    const store = placementChecksRef.current
+    const key = `${x},${y}`
+    if (store.results.has(key) || store.pending.has(key)) return
+    store.pending.set(key, store.epoch)
+    onCheckPlacement(x, y)
+  }, [onCheckPlacement, placementChecksRef])
+
+  useEffect(() => {
+    const store = placementChecksRef.current
+    if (towerLayoutKey !== placementLayoutKeyRef.current) {
+      placementLayoutKeyRef.current = towerLayoutKey
+      store.epoch++
+      store.results.clear()
+      // Dropping pending too is what makes the epoch bump stick: replies
+      // computed against the old layout find no matching entry and are
+      // discarded rather than cached as fact.
+      store.pending.clear()
+    }
+
+    if (!isConnected) {
+      // A dropped socket means any in-flight reply is never arriving. Clear
+      // the tickets so reconnecting re-asks, instead of leaving those cells
+      // stuck pending — and unclickable — for the rest of the run.
+      store.pending.clear()
+      return
+    }
+    if (isRunOver || hoverX < 0 || selectedTower || !selectedTowerType) return
+
+    // Cells that already fail a synchronous check are invalid for an
+    // unrelated reason — asking the server about them is pure noise.
+    const gs = liveStateRef.current
+    if (
+      (gs?.obstacles ?? []).some(o => o.x === hoverX && o.y === hoverY) ||
+      (gs?.spawn_point?.x === hoverX && gs?.spawn_point?.y === hoverY) ||
+      (gs?.goal_point?.x === hoverX && gs?.goal_point?.y === hoverY) ||
+      (gs?.towers ?? []).some(tw => tw.position.x === hoverX && tw.position.y === hoverY)
+    ) return
+
+    requestPlacementCheck(hoverX, hoverY)
+  }, [
+    hoverX, hoverY, towerLayoutKey, isConnected, isRunOver,
+    selectedTower, selectedTowerType, requestPlacementCheck, placementChecksRef, liveStateRef,
+  ])
 
   // Progression unlock: on the transition into victory, the beaten map
   // advances the chain — but only when it was exactly the next map in line
@@ -922,6 +1009,11 @@ const GameCanvas = ({
       }
     })
     let hoverBlocked = false
+    // Third axis on top of the old valid/invalid split: whether the server
+    // has cleared this cell as not sealing the lane. 'pending' is the honest
+    // "we haven't heard back" state — it must not read as approval, since
+    // the click is gated on a confirmed 'ok'.
+    let hoverPath: PathPreviewState = 'ok'
     const hoverPlacing = hovered && !currentIsGameOver && !selTower && selType !== null &&
       !towerByCell.has(`${hovered.x},${hovered.y}`)
     if (hoverPlacing && hovered && selType) {
@@ -929,8 +1021,20 @@ const GameCanvas = ({
         (gs?.obstacles ?? []).some(o => o.x === hovered.x && o.y === hovered.y) ||
         (gs?.spawn_point?.x === hovered.x && gs?.spawn_point?.y === hovered.y) ||
         (gs?.goal_point?.x === hovered.x && gs?.goal_point?.y === hovered.y)
+      if (!hoverBlocked) {
+        // Only cells that pass every synchronous check are ever asked about,
+        // so anything else stays 'ok' and the existing invalid look wins.
+        const answer = placementChecksRef.current.results.get(`${hovered.x},${hovered.y}`)
+        hoverPath = answer === undefined ? 'pending' : answer ? 'blocks' : 'ok'
+      }
       const canAfford = currentGold >= TOWER_COSTS[selType]
-      drawHoverUnderlay(ctx, hovered, selType, t, hoverBlocked || !canAfford)
+      drawHoverUnderlay(
+        ctx, hovered, selType, t,
+        hoverBlocked || !canAfford || hoverPath === 'blocks',
+        // The range ring is the "go ahead" signal — hold it back until the
+        // placement is actually cleared.
+        !hoverBlocked && canAfford && hoverPath === 'ok',
+      )
     }
 
     // 4. Entities.
@@ -1017,7 +1121,7 @@ const GameCanvas = ({
     // 7. Selection brackets + ghost preview on top.
     if (liveSel) drawSelectionBrackets(ctx, liveSel.position)
     if (hoverPlacing && hovered && selType) {
-      drawGhostTower(ctx, hovered, selType, t, hoverBlocked, currentGold >= TOWER_COSTS[selType])
+      drawGhostTower(ctx, hovered, selType, t, hoverBlocked, currentGold >= TOWER_COSTS[selType], hoverPath)
     }
 
     if (shaking) ctx.restore()
@@ -1428,7 +1532,9 @@ const GameCanvas = ({
     ctx.stroke()
   }
 
-  const drawHoverUnderlay = (ctx: CanvasRenderingContext2D, pos: Position, towerType: TowerType, t: number, invalid: boolean) => {
+  // showRange is not simply !invalid any more: a placement waiting on the
+  // server's path-block answer is not invalid, but it isn't cleared either.
+  const drawHoverUnderlay = (ctx: CanvasRenderingContext2D, pos: Position, towerType: TowerType, t: number, invalid: boolean, showRange: boolean) => {
     const px = pos.x * CELL_SIZE
     const py = pos.y * CELL_SIZE
     const accent = invalid ? PALETTE.danger : TOWER_COLORS[towerType]
@@ -1439,14 +1545,32 @@ const GameCanvas = ({
     ctx.setLineDash([4, 3])
     ctx.strokeRect(px + 3.5, py + 3.5, CELL_SIZE - 7, CELL_SIZE - 7)
     ctx.setLineDash([])
-    if (!invalid) {
+    if (showRange) {
       drawRangeRing(ctx, pos, TOWER_RANGES[towerType], accent, t, 0.4)
     }
   }
 
-  const drawGhostTower = (ctx: CanvasRenderingContext2D, pos: Position, towerType: TowerType, t: number, blocked: boolean, canAfford: boolean) => {
+  // Three ghost states, in priority order:
+  //   invalid  (wall / spawn / goal / broke) — 0.25 + corner-to-corner slash
+  //   blocks   (would seal the lane)         — 0.25 + no-entry glyph
+  //   pending  (server hasn't answered yet)  — breathing alpha, no marking
+  //   ok                                     — 0.45, unmarked
+  // 'blocks' shares the danger red with 'invalid' but swaps the glyph: it is
+  // a different problem (the maze, not the cell), and the slash already
+  // means "you cannot build here at all".
+  const drawGhostTower = (ctx: CanvasRenderingContext2D, pos: Position, towerType: TowerType, t: number, blocked: boolean, canAfford: boolean, pathState: PathPreviewState) => {
     const invalid = blocked || !canAfford
-    ctx.globalAlpha = invalid ? 0.25 : 0.45
+    const px = pos.x * CELL_SIZE
+    const py = pos.y * CELL_SIZE
+    if (invalid || pathState === 'blocks') {
+      ctx.globalAlpha = 0.25
+    } else if (pathState === 'pending') {
+      // Sits between the placeable 0.45 and the rejected 0.25, and breathes
+      // so a slow reply reads as "still thinking" rather than a dim ghost.
+      ctx.globalAlpha = 0.34 + 0.06 * Math.sin(t * 5)
+    } else {
+      ctx.globalAlpha = 0.45
+    }
     drawTower(ctx, {
       id: -1,
       position: { x: pos.x, y: pos.y },
@@ -1457,15 +1581,37 @@ const GameCanvas = ({
     }, t, 1)
     ctx.globalAlpha = 1
     if (invalid) {
-      const px = pos.x * CELL_SIZE
-      const py = pos.y * CELL_SIZE
       ctx.strokeStyle = PALETTE.danger
       ctx.lineWidth = 2
       ctx.beginPath()
       ctx.moveTo(px + 6, py + 6)
       ctx.lineTo(px + CELL_SIZE - 6, py + CELL_SIZE - 6)
       ctx.stroke()
+    } else if (pathState === 'blocks') {
+      drawNoEntryGlyph(ctx, px + CELL_SIZE / 2, py + CELL_SIZE / 2)
     }
+  }
+
+  // "No entry": stroked circle with one diagonal bar, sized to fill the
+  // cell. Drawn over the ghost at full opacity with a soft red bloom so it
+  // stays legible on top of the turret silhouette.
+  const drawNoEntryGlyph = (ctx: CanvasRenderingContext2D, cx: number, cy: number) => {
+    const r = CELL_SIZE * 0.33
+    const bar = r * 0.72 // chord inset, so the bar stops inside the ring
+    ctx.save()
+    ctx.strokeStyle = PALETTE.danger
+    ctx.lineWidth = 3
+    ctx.lineCap = 'round'
+    ctx.shadowColor = PALETTE.danger
+    ctx.shadowBlur = 8
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(cx - bar, cy + bar)
+    ctx.lineTo(cx + bar, cy - bar)
+    ctx.stroke()
+    ctx.restore()
   }
 
   // ——— towers ———
@@ -2379,8 +2525,16 @@ const GameCanvas = ({
     return x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT ? { x, y } : null
   }
 
+  // Deduped by cell, not by event: a mousemove inside the current cell keeps
+  // the previous object, so React skips the re-render and the path-block
+  // check fires once per cell crossed instead of once per pixel of travel.
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    setHoveredCell(cellFromEvent(e))
+    const cell = cellFromEvent(e)
+    setHoveredCell(prev => {
+      if (prev === cell) return prev
+      if (prev && cell && prev.x === cell.x && prev.y === cell.y) return prev
+      return cell
+    })
   }
 
   const handleMouseLeave = () => setHoveredCell(null)
@@ -2418,8 +2572,21 @@ const GameCanvas = ({
       (gs?.spawn_point && gs.spawn_point.x === hovered.x && gs.spawn_point.y === hovered.y) ||
       (gs?.goal_point && gs.goal_point.x === hovered.x && gs.goal_point.y === hovered.y)
 
+    // Sealing the lane is a server-side rejection, so the click needs the
+    // server's answer for this cell first. No answer yet (hover check still
+    // in flight, or the board changed a moment ago) is treated exactly like
+    // a known-invalid cell: the click does nothing and the next frame's
+    // ghost shows why.
+    const pathOK = placementChecksRef.current.results.get(`${hovered.x},${hovered.y}`) === false
+
     if (isConnected && !blocked && selType !== null && currentGold >= TOWER_COSTS[selType]) {
-      onPlaceTower(hovered.x, hovered.y, selType)
+      if (pathOK) {
+        onPlaceTower(hovered.x, hovered.y, selType)
+      } else {
+        // No answer for this cell yet. Make sure one is on its way so the
+        // retry click lands, rather than dying the same way.
+        requestPlacementCheck(hovered.x, hovered.y)
+      }
     }
   }
 

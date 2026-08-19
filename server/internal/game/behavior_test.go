@@ -25,28 +25,38 @@ func newTestGameOnMap(mapID string) *GameStateWithShooting {
 	return gs
 }
 
-// wallColumn places towers down every open cell of a grid column via the
-// public API, so combined with any map obstacles the column fully blocks
-// pathfinding.
+// wallColumn seals a grid column with towers so that, combined with any map
+// obstacles, pathfinding is fully blocked.
+//
+// It appends to gs.Towers directly rather than going through AddTower: a
+// sealed lane is exactly the state these tests need, and AddTower now
+// refuses to create it (ErrPathBlocked). Reaching in keeps the trapped-enemy
+// behavior under test — which is still reachable in play, since an enemy can
+// be walled into a pocket while spawn→goal stays open — without weakening
+// the placement rule the rest of the suite checks.
+//
+// Towers go in disarmed so these tests exercise pathing, not combat.
 func wallColumn(t *testing.T, gs *GameStateWithShooting, x int) {
 	t.Helper()
+	stats := getTowerStats("basic")
 	gs.mu.Lock()
-	gs.Gold = 1_000_000
-	gs.mu.Unlock()
-	for y := 0; y < 15; y++ {
+	defer gs.mu.Unlock()
+	for y := 0; y < gridHeight; y++ {
 		if gs.isObstacle(x, y) {
 			continue // already walled by the map itself
 		}
-		if _, err := gs.AddTower(float64(x), float64(y), "basic"); err != nil {
-			t.Fatalf("failed to place wall tower at (%d,%d): %v", x, y, err)
-		}
+		gs.Towers = append(gs.Towers, Tower{
+			ID:        gs.nextTowerID,
+			Position:  Position{X: float64(x), Y: float64(y)},
+			TowerType: "basic",
+			Level:     1,
+			Range:     stats.Range,
+			Damage:    0,
+			FireRate:  stats.FireRate,
+		})
+		gs.nextTowerID++
 	}
-	// Disarm the wall so these tests exercise pathing, not combat.
-	gs.mu.Lock()
-	for i := range gs.Towers {
-		gs.Towers[i].Damage = 0
-	}
-	gs.mu.Unlock()
+	gs.RecalculateEnemyPaths()
 }
 
 func tick(gs *GameStateWithShooting, seconds float64) {
@@ -69,7 +79,7 @@ func TestTrappedEnemyStopsInsteadOfLeaking(t *testing.T) {
 	gs.StartWave(1)
 	gs.DecrementEnemiesRemaining() // spawn accounting: 1 spawned, 0 remaining
 
-	wallColumn(t, gs, 10) // fully blocks the goal; RecalculateEnemyPaths runs inside AddTower
+	wallColumn(t, gs, 10) // fully blocks the goal; recalculates enemy paths
 
 	tick(gs, 5)
 
@@ -481,6 +491,155 @@ func TestAddTowerPlacementValidation(t *testing.T) {
 
 	if g := gs.GetSnapshot().Gold; g != 150 {
 		t.Errorf("gold = %d after one $50 tower + rejections, want 150", g)
+	}
+}
+
+// A placement that would seal the only spawn→goal route is rejected before
+// any gold moves — that seal is the setup for the freeze-and-farm exploit
+// (walled-in enemies soak tower fire without leaking, then the wall comes
+// down). Placements that merely narrow the route stay legal: rerouting the
+// lane is the core of the game.
+func TestAddTowerRejectsSealingThePath(t *testing.T) {
+	gs := newTestGame()
+	gs.mu.Lock()
+	gs.Gold = 1_000_000
+	gs.mu.Unlock()
+
+	// Column 2 is clear of the switchback bulkheads, so the towers below are
+	// the only thing that can seal it.
+	const wallX = 2
+	var open []int
+	for y := 0; y < gridHeight; y++ {
+		if !gs.isObstacle(wallX, y) {
+			open = append(open, y)
+		}
+	}
+	if len(open) < 2 {
+		t.Fatalf("column %d has %d open cells, need a real wall to build", wallX, len(open))
+	}
+
+	// Every tower but the last narrows the lane without sealing it.
+	for _, y := range open[:len(open)-1] {
+		if _, err := gs.AddTower(float64(wallX), float64(y), "basic"); err != nil {
+			t.Fatalf("narrowing placement at (%d,%d) rejected: %v", wallX, y, err)
+		}
+	}
+
+	lastY := open[len(open)-1]
+	goldBefore := gs.GetSnapshot().Gold
+	towersBefore := len(gs.GetSnapshot().Towers)
+
+	if _, err := gs.AddTower(float64(wallX), float64(lastY), "basic"); !errors.Is(err, ErrPathBlocked) {
+		t.Fatalf("sealing placement at (%d,%d): err = %v, want ErrPathBlocked", wallX, lastY, err)
+	}
+
+	snap := gs.GetSnapshot()
+	if snap.Gold != goldBefore || len(snap.Towers) != towersBefore {
+		t.Errorf("rejected placement mutated state: gold %d->%d, towers %d->%d",
+			goldBefore, snap.Gold, towersBefore, len(snap.Towers))
+	}
+	if gs.FindPathFromSpawn() == nil {
+		t.Error("path is sealed after a rejected placement")
+	}
+}
+
+// Every map must stay sealable-proof: on each registry map, walling the last
+// open cell of some column is rejected, and the route survives.
+func TestAddTowerPathBlockedOnEveryMap(t *testing.T) {
+	for _, m := range MapRegistry {
+		t.Run(m.ID, func(t *testing.T) {
+			gs := newTestGameOnMap(m.ID)
+			gs.mu.Lock()
+			gs.Gold = 1_000_000
+			gs.mu.Unlock()
+
+			// Wall column 2 (clear of the spawn/goal cells on every map,
+			// which sit at x=0 and x=19) one cell at a time. The last
+			// legal cell must be the one that gets refused.
+			sealed := false
+			for y := 0; y < gridHeight; y++ {
+				if gs.isObstacle(2, y) {
+					continue
+				}
+				_, err := gs.AddTower(2, float64(y), "basic")
+				if errors.Is(err, ErrPathBlocked) {
+					sealed = true
+					continue
+				}
+				if err != nil {
+					t.Fatalf("placement at (2,%d) rejected: %v", y, err)
+				}
+			}
+			if !sealed {
+				t.Fatal("walling an entire column was never refused")
+			}
+			if gs.FindPathFromSpawn() == nil {
+				t.Error("column wall sealed the lane despite the check")
+			}
+		})
+	}
+}
+
+// WouldBlockPath is the read-only preview behind the placement ghost: same
+// answer as AddTower's gate — no mutation, no gold or tower-type opinion.
+func TestWouldBlockPath(t *testing.T) {
+	gs := newTestGame()
+	gs.mu.Lock()
+	gs.Gold = 1_000_000
+	gs.mu.Unlock()
+
+	// Open board: no single cell can seal a 20x15 grid, so every legal cell
+	// previews as safe.
+	if gs.WouldBlockPath(5, 5) {
+		t.Error("WouldBlockPath(5,5) = true on an open board, want false")
+	}
+
+	const wallX = 2
+	var open []int
+	for y := 0; y < gridHeight; y++ {
+		if !gs.isObstacle(wallX, y) {
+			open = append(open, y)
+		}
+	}
+	for _, y := range open[:len(open)-1] {
+		if _, err := gs.AddTower(float64(wallX), float64(y), "basic"); err != nil {
+			t.Fatalf("narrowing placement at (%d,%d) rejected: %v", wallX, y, err)
+		}
+	}
+	lastY := float64(open[len(open)-1])
+
+	if !gs.WouldBlockPath(float64(wallX), lastY) {
+		t.Errorf("WouldBlockPath(%d,%v) = false on the sealing cell, want true", wallX, lastY)
+	}
+	// Preview only: the board is untouched, so the cell is still free and
+	// the answer is stable across calls.
+	if !gs.WouldBlockPath(float64(wallX), lastY) {
+		t.Error("WouldBlockPath is not idempotent")
+	}
+	if got := len(gs.GetSnapshot().Towers); got != len(open)-1 {
+		t.Errorf("WouldBlockPath mutated the board: %d towers, want %d", got, len(open)-1)
+	}
+
+	// A cell away from the wall still leaves the lane open.
+	if gs.WouldBlockPath(10, 10) {
+		t.Error("WouldBlockPath(10,10) = true, want false")
+	}
+}
+
+// Without a spawn/goal pair there is nothing to keep connected, so the check
+// sits out rather than panicking on the nil pointers.
+func TestPathCheckSkippedWithoutSpawnGoal(t *testing.T) {
+	gs := NewGameStateWithShooting("test")
+	gs.mu.Lock()
+	gs.SpawnPoint, gs.GoalPoint = nil, nil
+	gs.Gold = 1_000_000
+	gs.mu.Unlock()
+
+	if gs.WouldBlockPath(5, 5) {
+		t.Error("WouldBlockPath = true with no spawn/goal, want false")
+	}
+	if _, err := gs.AddTower(5, 5, "basic"); err != nil {
+		t.Errorf("placement rejected with no spawn/goal: %v", err)
 	}
 }
 

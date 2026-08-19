@@ -218,3 +218,30 @@ export const GAME_MAPS: GameMapInfo[] = [
 // screen renders this so the unlock chain reads left-to-right.
 export const GAME_MAPS_BY_SEQUENCE: GameMapInfo[] =
   [...GAME_MAPS].sort((a, b) => a.sequenceOrder - b.sequenceOrder)
+
+// ————————————————————————————————————————————————————————————————————————
+// Placement preview — "would a tower here seal the lane?"
+// ————————————————————————————————————————————————————————————————————————
+
+// Answers to check_placement, keyed by cell ("x,y"). App fills it from the
+// socket; GameCanvas reads it to pick the ghost-tower state and to gate the
+// placement click. It lives in a ref rather than React state: it changes on
+// every hovered cell and only the canvas loop reads it.
+//
+// An answer is only true for the tower layout it was computed against, so
+// the store is versioned. GameCanvas bumps epoch and empties both maps
+// whenever the board changes, and a reply whose pending epoch no longer
+// matches is discarded instead of cached.
+export interface PlacementCheckStore {
+  // cell key → blocks_path
+  results: Map<string, boolean>
+  // cell key → the epoch its request was sent under (i.e. still in flight)
+  pending: Map<string, number>
+  epoch: number
+}
+
+export const newPlacementCheckStore = (): PlacementCheckStore => ({
+  results: new Map(),
+  pending: new Map(),
+  epoch: 0,
+})
