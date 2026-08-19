@@ -4,7 +4,7 @@ import GameCanvas from './game/GameCanvas'
 import ErrorBoundary from './ui/ErrorBoundary'
 import SettingsMenu from './ui/SettingsMenu'
 import { useWebSocket } from './hooks/useWebSocket'
-import { Difficulty, GameState } from './types/game'
+import { Difficulty, GameState, newPlacementCheckStore } from './types/game'
 import { sound } from './audio/sound'
 
 // Dev: Vite serves the client on 5173, Go server runs separately on 8080.
@@ -53,6 +53,9 @@ function App() {
   // Highest explosion effect ID heard so far — new IDs above it trigger the
   // explosion SFX (effect IDs are a monotonic per-game counter).
   const lastExplosionIdRef = useRef(0)
+  // check_placement answers, shared with GameCanvas: App writes replies here,
+  // the canvas requests, reads and invalidates. See PlacementCheckStore.
+  const placementChecksRef = useRef(newPlacementCheckStore())
 
   // Browsers only allow audio after a user gesture: the first pointer/key
   // input unlocks the AudioContext and starts the ambient music loop.
@@ -122,6 +125,24 @@ function App() {
         return
       }
 
+      // Path-block preview reply for one hovered cell. The pending entry is
+      // the ticket: GameCanvas drops it whenever the tower layout changes,
+      // so a reply that outlived its board finds nothing to match and is
+      // discarded instead of being cached as fact. Cells the cursor has
+      // since left are still cached — the answer is about the cell, not the
+      // cursor, and staying cached is what makes moving back instant.
+      if (message.type === 'check_placement') {
+        const { x, y, blocks_path: blocks } = (message.payload ?? {}) as
+          { x?: number; y?: number; blocks_path?: boolean }
+        if (typeof x !== 'number' || typeof y !== 'number' || typeof blocks !== 'boolean') return
+        const store = placementChecksRef.current
+        const key = `${x},${y}`
+        if (store.pending.get(key) !== store.epoch) return // stale board
+        store.pending.delete(key)
+        store.results.set(key, blocks)
+        return
+      }
+
       if (message.type === 'game_state' && message.payload?.state) {
         const incoming: GameState = message.payload.state
         const prevPhase = liveStateRef.current.phase
@@ -174,6 +195,17 @@ function App() {
       type: 'place_tower',
       room_id: ROOM_ID,
       payload: { x, y, tower_type: towerType }
+    })
+  }, [hasJoined, sendMessage])
+
+  // Hover preview only — AddTower re-checks server-side and is the real
+  // gate, so a dropped or slow reply can never let a sealing tower through.
+  const handleCheckPlacement = useCallback((x: number, y: number) => {
+    if (!hasJoined) return
+    sendMessage({
+      type: 'check_placement',
+      room_id: ROOM_ID,
+      payload: { x, y }
     })
   }, [hasJoined, sendMessage])
 
@@ -371,6 +403,8 @@ function App() {
           onNewGame={handleNewGame}
           onContinueEndless={handleContinueEndless}
           onSpawnEnemy={handleSpawnEnemy}
+          onCheckPlacement={handleCheckPlacement}
+          placementChecksRef={placementChecksRef}
           showDebug={showDebug}
           />
         </ErrorBoundary>

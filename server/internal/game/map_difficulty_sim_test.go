@@ -23,6 +23,7 @@ package game
 // only the comparison between maps under the identical strategy does.
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -76,18 +77,15 @@ func simPlaceGreedy(t *testing.T, gs *GameStateWithShooting, n int) {
 		if bestX < 0 {
 			t.Fatal("sim: no buildable cell left")
 		}
+		// Never seal the lane. The server refuses sealing placements itself
+		// now (ErrPathBlocked), so the greedy pick just falls through to the
+		// best cell that keeps the path open — the next-best cell differs
+		// once the tower list changes, and the path recompute above re-scores
+		// all cells anyway.
 		if _, err := gs.AddTower(float64(bestX), float64(bestY), "basic"); err != nil {
-			t.Fatalf("sim: greedy placement failed at (%d,%d): %v", bestX, bestY, err)
-		}
-		// Never seal the lane: if this placement disconnected spawn from goal,
-		// take it back and blacklist nothing — the next-best cell differs once
-		// the tower list changes, and the path recompute above re-scores all
-		// cells anyway. (Sell refunds gold; gold is effectively infinite here.)
-		if gs.FindPathFromSpawn() == nil {
-			snap := gs.GetSnapshot()
-			last := snap.Towers[len(snap.Towers)-1]
-			gs.RemoveTower(last.ID)
-			// Re-place on the best cell that keeps the path open.
+			if !errors.Is(err, ErrPathBlocked) {
+				t.Fatalf("sim: greedy placement failed at (%d,%d): %v", bestX, bestY, err)
+			}
 			if !simPlaceBestOpen(gs, towerRange) {
 				t.Fatal("sim: could not place without sealing the path")
 			}

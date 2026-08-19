@@ -25,6 +25,11 @@ const (
 	// continue_endless: from the victory phase, keep the current run going
 	// past the win wave (flips the room to Endless; nothing resets).
 	MessageTypeContinueEndless = "continue_endless"
+	// check_placement: read-only hover query — "would a tower on this cell
+	// seal the spawn→goal lane?". Answered to the asking client only, so
+	// the placement ghost can warn before the click. Advisory: AddTower
+	// re-checks and is the actual gate.
+	MessageTypeCheckPlacement = "check_placement"
 )
 
 // Message represents a WebSocket message

@@ -173,6 +173,8 @@ func (c *Client) handleMessage(msg *Message) {
 			status := "invalid_placement"
 			if errors.Is(err, game.ErrInsufficientGold) {
 				status = "insufficient_funds"
+			} else if errors.Is(err, game.ErrPathBlocked) {
+				status = "path_blocked"
 			}
 			log.Printf("Client %s tower placement rejected (%s at %.0f,%.0f): %v", c.id, towerType, x, y, err)
 			response := Message{
@@ -199,6 +201,37 @@ func (c *Client) handleMessage(msg *Message) {
 			},
 		}
 		c.sendJSON(response)
+
+	case MessageTypeCheckPlacement:
+		roomID := msg.RoomID
+		if roomID == "" {
+			roomID = c.roomID
+		}
+		if roomID == "" {
+			return
+		}
+		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
+		if !exists {
+			return
+		}
+		x, xOk := msg.Payload["x"].(float64)
+		y, yOk := msg.Payload["y"].(float64)
+		if !xOk || !yOk {
+			log.Printf("Invalid check_placement data: %v", msg.Payload)
+			return
+		}
+		// Echo x/y back: these fly one per hovered cell, so a reply can
+		// land after the cursor has moved on and the client needs to know
+		// which cell it describes. Success is deliberately not logged — one
+		// line per cell crossed would drown the log.
+		c.sendJSON(Message{
+			Type: MessageTypeCheckPlacement,
+			Payload: map[string]interface{}{
+				"x":           x,
+				"y":           y,
+				"blocks_path": room.WouldBlockPath(x, y),
+			},
+		})
 
 	case MessageTypeRemoveTower:
 		roomID := msg.RoomID

@@ -14,6 +14,7 @@ export type MessageType =
   | 'spawn_enemy'
   | 'new_game'
   | 'continue_endless' // victory screen: keep the run going past the win wave
+  | 'check_placement' // hover preview: would a tower here seal the lane?
 
 export interface WebSocketMessage {
   type: MessageType
