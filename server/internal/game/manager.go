@@ -1,39 +1,112 @@
 package game
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"sync"
 	"time"
 )
 
-// Manager handles multiple game rooms
+const (
+	// DefaultMaxRooms caps how many rooms (each with its own 60 Hz loop) can
+	// exist at once. Rooms are private, one per visitor, so this is also the
+	// ceiling on concurrent games.
+	DefaultMaxRooms = 50
+	// DefaultRoomIdleGrace is how long a room with no players survives before
+	// it is deleted and its loop stops. Long enough for a page refresh or a
+	// short network drop to rejoin the same game.
+	DefaultRoomIdleGrace = 60 * time.Second
+
+	// simStep is the fixed simulation step. Speed 2x/3x runs more steps per
+	// tick, never bigger ones, so a run plays out identically at any speed.
+	simStep = 1.0 / 60.0
+	// maxFrameTime caps how much real time one tick may catch up on. A long
+	// stall (GC, host load) resumes slightly behind instead of fast-forwarding
+	// through seconds of game in a single frame.
+	maxFrameTime = 0.1
+)
+
+// ErrTooManyRooms is returned by CreateRoom when the room cap is reached.
+var ErrTooManyRooms = errors.New("room limit reached")
+
+// Manager owns every game room and its game loop.
 type Manager struct {
 	shootingRooms map[string]*GameStateWithShooting
 	mu            sync.RWMutex
-	broadcast     chan BroadcastMessage
 	// onGameOver is copied onto every room at creation (see SetGameOverHook).
 	onGameOver func(roomID string, wave, score int, duration float64)
+	// sink receives each room's marshalled snapshot once per tick, called
+	// directly from that room's loop goroutine. Rooms no longer share one
+	// broadcast channel, so a busy room can't make the others drop frames.
+	sink      func(roomID string, snapshot []byte)
+	maxRooms  int
+	idleGrace time.Duration
 }
 
-// BroadcastMessage contains room ID and data to broadcast
-type BroadcastMessage struct {
-	RoomID string
-	Data   []byte
-}
-
-// NewManager creates a new game manager
+// NewManager creates a game manager with the default limits.
 func NewManager() *Manager {
 	return &Manager{
 		shootingRooms: make(map[string]*GameStateWithShooting),
-		broadcast:     make(chan BroadcastMessage, 256),
+		maxRooms:      DefaultMaxRooms,
+		idleGrace:     DefaultRoomIdleGrace,
 	}
 }
 
-// GetOrCreateShootingRoom returns the room for roomID, creating it if absent.
-// Check and create happen under one lock so concurrent joins cannot create
-// duplicate rooms (each with its own game loop). created reports whether this
-// call made the room — only the creator should start the game loop.
+// SetLimits overrides the room cap and idle grace period (tests use short
+// values). Call before serving traffic.
+func (m *Manager) SetLimits(maxRooms int, idleGrace time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.maxRooms = maxRooms
+	m.idleGrace = idleGrace
+}
+
+// SetSnapshotSink installs the per-tick snapshot receiver (the hub). Call
+// before serving traffic.
+func (m *Manager) SetSnapshotSink(sink func(roomID string, snapshot []byte)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sink = sink
+}
+
+// newRoomCode returns a 128-bit random hex string. It doubles as the room ID
+// and the only way back into the room, so it must not be guessable.
+func newRoomCode() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failing means the OS entropy source is broken; there
+		// is no safe fallback for a secret.
+		panic("crypto/rand: " + err.Error())
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// CreateRoom makes a new private room with a server-chosen code, starts its
+// game loop, and returns it. Fails with ErrTooManyRooms at the cap.
+func (m *Manager) CreateRoom() (*GameStateWithShooting, error) {
+	m.mu.Lock()
+	if len(m.shootingRooms) >= m.maxRooms {
+		m.mu.Unlock()
+		return nil, ErrTooManyRooms
+	}
+	code := newRoomCode()
+	for m.shootingRooms[code] != nil { // astronomically unlikely
+		code = newRoomCode()
+	}
+	room := m.newRoomLocked(code)
+	m.mu.Unlock()
+
+	room.SetSpawnGoal(Position{X: 0, Y: 7}, Position{X: 19, Y: 7})
+	go m.StartGameLoop(code)
+	return room, nil
+}
+
+// GetOrCreateShootingRoom returns the room for roomID, creating it if absent,
+// WITHOUT starting a game loop and without the room cap. Only tests and
+// in-process tools use it; client traffic goes through CreateRoom.
 func (m *Manager) GetOrCreateShootingRoom(roomID string) (room *GameStateWithShooting, created bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -41,15 +114,21 @@ func (m *Manager) GetOrCreateShootingRoom(roomID string) (room *GameStateWithSho
 	if room, exists := m.shootingRooms[roomID]; exists {
 		return room, false
 	}
-	room = NewGameStateWithShooting(roomID)
+	return m.newRoomLocked(roomID), true
+}
+
+// newRoomLocked registers a fresh room. Caller holds m.mu.
+func (m *Manager) newRoomLocked(roomID string) *GameStateWithShooting {
+	room := NewGameStateWithShooting(roomID)
 	if m.onGameOver != nil {
 		hook := m.onGameOver
 		room.OnGameOver = func(wave, score int, duration float64) {
 			hook(roomID, wave, score, duration)
 		}
 	}
+	room.emptySince = time.Now()
 	m.shootingRooms[roomID] = room
-	return room, true
+	return room
 }
 
 // SetGameOverHook installs a callback fired once per completed game in any
@@ -61,7 +140,7 @@ func (m *Manager) SetGameOverHook(hook func(roomID string, wave, score int, dura
 	m.onGameOver = hook
 }
 
-// GetShootingRoom retrieves a shooting game room by ID
+// GetShootingRoom retrieves a room by ID.
 func (m *Manager) GetShootingRoom(roomID string) (*GameStateWithShooting, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -70,133 +149,193 @@ func (m *Manager) GetShootingRoom(roomID string) (*GameStateWithShooting, bool) 
 	return room, exists
 }
 
-// AddPlayer adds a player to a room
-func (m *Manager) AddPlayer(roomID, playerID string) bool {
+// RoomCount returns how many rooms exist.
+func (m *Manager) RoomCount() int {
 	m.mu.RLock()
-	room, exists := m.shootingRooms[roomID]
-	m.mu.RUnlock()
+	defer m.mu.RUnlock()
+	return len(m.shootingRooms)
+}
 
+// AddPlayer adds a player to a room. Adding an ID that is already present is
+// a no-op, so repeat joins can't grow the list.
+func (m *Manager) AddPlayer(roomID, playerID string) bool {
+	room, exists := m.GetShootingRoom(roomID)
 	if !exists {
 		return false
 	}
 
 	room.mu.Lock()
+	defer room.mu.Unlock()
+	for _, id := range room.Players {
+		if id == playerID {
+			return true
+		}
+	}
 	room.Players = append(room.Players, playerID)
-	room.mu.Unlock()
+	room.emptySince = time.Time{}
 	return true
 }
 
-// RemovePlayer removes a player from a room
+// RemovePlayer removes a player from a room. When the last player leaves, the
+// idle clock starts; the game loop deletes the room once it runs out.
 func (m *Manager) RemovePlayer(roomID, playerID string) {
-	m.mu.RLock()
-	room, exists := m.shootingRooms[roomID]
-	m.mu.RUnlock()
-
+	room, exists := m.GetShootingRoom(roomID)
 	if !exists {
 		return
 	}
 
 	room.mu.Lock()
+	defer room.mu.Unlock()
 	for i, id := range room.Players {
 		if id == playerID {
 			room.Players = append(room.Players[:i], room.Players[i+1:]...)
 			break
 		}
 	}
-	room.mu.Unlock()
+	if len(room.Players) == 0 && room.emptySince.IsZero() {
+		room.emptySince = time.Now()
+	}
 }
 
-// StartGameLoop starts the 60 FPS game loop for a room
+// DeleteRoom removes a room and cancels its spawner. Its game loop notices on
+// the next tick and exits.
+func (m *Manager) DeleteRoom(roomID string) {
+	m.mu.Lock()
+	room, exists := m.shootingRooms[roomID]
+	delete(m.shootingRooms, roomID)
+	m.mu.Unlock()
+	if exists {
+		room.cancelSpawns()
+	}
+}
+
+// reapIfIdle deletes the room when it has had no players for longer than the
+// grace period. Returns true when the room was deleted.
+func (m *Manager) reapIfIdle(roomID string, room *GameStateWithShooting, now time.Time) bool {
+	m.mu.RLock()
+	grace := m.idleGrace
+	m.mu.RUnlock()
+	if idle := room.idleSince(); idle.IsZero() || now.Sub(idle) < grace {
+		return false
+	}
+	m.DeleteRoom(roomID)
+	log.Printf("🧹 Room %s idle for %s, closed", shortID(roomID), grace)
+	return true
+}
+
+// shortID trims a room code for log lines: enough to correlate, not enough to
+// rejoin someone else's room from a leaked log.
+func shortID(roomID string) string {
+	if len(roomID) > 8 {
+		return roomID[:8]
+	}
+	return roomID
+}
+
+// StartGameLoop runs a room at 60 ticks a second until the room is deleted.
+// Each tick runs as many fixed simulation steps as the real time elapsed
+// (times the speed multiplier) calls for, so the game neither slows down
+// when ticks are late nor changes its rules at 2x/3x.
 func (m *Manager) StartGameLoop(roomID string) {
-	log.Printf("🎮 Starting game loop for room: %s", roomID)
+	log.Printf("🎮 Starting game loop for room: %s", shortID(roomID))
 
 	ticker := time.NewTicker(time.Second / 60)
 	defer ticker.Stop()
 
 	frameCount := 0
 	lastLog := time.Now()
+	last := time.Now()
+	acc := 0.0
 
-	for range ticker.C {
-		m.mu.RLock()
-		room, exists := m.shootingRooms[roomID]
-		m.mu.RUnlock()
-
+	for now := range ticker.C {
+		room, exists := m.GetShootingRoom(roomID)
 		if !exists {
-			log.Printf("⚠️ Room %s deleted, stopping game loop", roomID)
+			log.Printf("Room %s deleted, stopping game loop", shortID(roomID))
+			return
+		}
+		if m.reapIfIdle(roomID, room, now) {
 			return
 		}
 
-		room.Update(1.0 / 60.0 * room.GetSpeedMultiplier())
-
-		snapshot := room.GetSnapshot()
+		acc = advance(room, acc, now.Sub(last).Seconds())
+		last = now
 
 		frameCount++
 		if frameCount%600 == 0 {
-			elapsed := time.Since(lastLog)
-			fps := float64(600) / elapsed.Seconds()
-			log.Printf("📊 Room %s - FPS: %.1f | Phase: %s | Wave: %d | Towers: %d | Enemies: %d | Projectiles: %d",
-				roomID, fps, snapshot.Phase, snapshot.Wave, len(snapshot.Towers), len(snapshot.Enemies), len(snapshot.Projectiles))
+			fps := float64(600) / time.Since(lastLog).Seconds()
+			log.Printf("📊 Room %s - FPS: %.1f", shortID(roomID), fps)
 			lastLog = time.Now()
 		}
 
-		data, err := json.Marshal(snapshot)
+		// Nobody watching (grace period after the last player left): keep
+		// simulating, skip the snapshot and marshal.
+		if !room.hasPlayers() {
+			continue
+		}
+
+		m.mu.RLock()
+		sink := m.sink
+		m.mu.RUnlock()
+		if sink == nil {
+			continue
+		}
+
+		data, err := json.Marshal(room.GetSnapshot())
 		if err != nil {
 			log.Printf("❌ Failed to marshal game state: %v", err)
 			continue
 		}
-
-		select {
-		case m.broadcast <- BroadcastMessage{
-			RoomID: roomID,
-			Data:   data,
-		}:
-		default:
-			if frameCount%300 == 0 {
-				log.Printf("⚠️ Broadcast channel full for room %s", roomID)
-			}
-		}
+		sink(roomID, data)
 	}
 }
 
-// SpawnWave spawns enemies for the current wave with delays between spawns.
-func (m *Manager) SpawnWave(roomID string) {
-	m.mu.RLock()
-	room, exists := m.shootingRooms[roomID]
-	m.mu.RUnlock()
+// advance runs the fixed simulation steps owed for elapsed real seconds at
+// the room's speed, and returns the leftover fraction of a step to carry
+// into the next tick. The tiny epsilon keeps float drift (3 × 1/60 summing
+// to a hair under 0.05) from deferring a step to the next tick.
+func advance(room *GameStateWithShooting, acc, elapsed float64) float64 {
+	if elapsed > maxFrameTime {
+		elapsed = maxFrameTime
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	acc += elapsed * room.GetSpeedMultiplier()
+	for acc >= simStep-1e-9 {
+		room.Update(simStep)
+		acc -= simStep
+	}
+	if acc < 0 {
+		acc = 0
+	}
+	return acc
+}
 
+// SpawnWave spawns enemies for the current wave with delays between spawns.
+// The waiting→active flip, the wave number and the cancel channel come from
+// one locked step (BeginWave), and each spawn re-checks that channel under
+// the same lock that adds the enemy, so a New Game landing at any point can't
+// leave a stale spawner feeding the new run.
+func (m *Manager) SpawnWave(roomID string) {
+	room, exists := m.GetShootingRoom(roomID)
 	if !exists {
 		return
 	}
 
-	snapshot := room.GetSnapshot()
-	waveNum := snapshot.Wave
-	config := GetWaveConfig(waveNum)
-
-	total := 0
-	for _, group := range config.Enemies {
-		total += group.Count
-	}
-
-	// Capture the cancel channel for THIS wave before flipping the phase, so
-	// a Reset that lands mid-setup still cancels this spawner.
-	cancel := room.GetSpawnCancel()
-
-	if !room.StartWave(total) {
-		log.Printf("⚠️ Wave %d not started in room %s — game not in waiting phase", waveNum, roomID)
+	waveNum, config, cancel, ok := room.BeginWave()
+	if !ok {
+		log.Printf("Wave not started in room %s — game not in waiting phase", shortID(roomID))
 		return
 	}
-	log.Printf("🌊 Starting wave %d — %d enemies total", waveNum, total)
 
-	// No early bail when the path is blocked at wave start: each iteration
+	// No early bail when the path is blocked at wave start: each spawn
 	// re-checks and skips blocked spawns while still decrementing the
 	// remaining counter, so a fully walled-off wave completes instead of
 	// soft-locking the game in the active phase.
 	for _, group := range config.Enemies {
 		for i := 0; i < group.Count; i++ {
-			// Check if cancelled (new game started)
 			select {
 			case <-cancel:
-				log.Printf("🛑 Wave %d spawn cancelled (new game)", waveNum)
 				return
 			default:
 			}
@@ -213,36 +352,22 @@ func (m *Manager) SpawnWave(roomID string) {
 			for room.IsPaused() {
 				select {
 				case <-cancel:
-					log.Printf("🛑 Wave %d spawn cancelled while paused (new game)", waveNum)
 					return
 				case <-time.After(100 * time.Millisecond):
 				}
 			}
 
-			if path := room.FindPathFromSpawn(); path != nil {
-				room.AddEnemy(group.EnemyType, path, waveNum)
-			} else {
-				log.Printf("⚠️ Path blocked, skipping enemy %d/%d in wave %d", i+1, group.Count, waveNum)
+			if !room.SpawnForWave(cancel, group.EnemyType, waveNum) {
+				return // cancelled between the check above and the spawn
 			}
-
-			room.DecrementEnemiesRemaining()
 
 			spawnDelay := group.SpawnDelay / room.GetSpeedMultiplier()
 
-			// Wait before next spawn, but bail early if cancelled
 			select {
 			case <-cancel:
-				log.Printf("🛑 Wave %d spawn cancelled during delay (new game)", waveNum)
 				return
 			case <-time.After(time.Duration(spawnDelay * float64(time.Second))):
 			}
 		}
 	}
-
-	log.Printf("✅ Wave %d spawn complete", waveNum)
-}
-
-// GetBroadcastChannel returns the broadcast channel for the hub to read from
-func (m *Manager) GetBroadcastChannel() <-chan BroadcastMessage {
-	return m.broadcast
 }

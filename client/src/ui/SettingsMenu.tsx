@@ -1,8 +1,9 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { getSettings, setSetting, subscribeSettings, GameSettings } from '../settings'
 import { sound } from '../audio/sound'
+import Dialog from './Dialog'
 
-// Settings modal — 4 toggles (Phase 20 scope, locked July 16; the separate
+// Settings modal: 4 toggles (Phase 20 scope, locked July 16; the separate
 // Sound toggle removed July 16 — it duplicated Mute exactly, since the audio
 // engine only played when both were on): the three Phase 19 effects, plus
 // the Mute control relocated here from the header. Effects persist via the
@@ -26,18 +27,11 @@ const SettingsMenu = ({ onClose }: { onClose: () => void }) => {
   const settings = useSyncExternalStore(subscribeSettings, getSettings)
   const [muted, setMuted] = useState(sound.isMuted())
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
+  // Escape, focus handling and the backdrop click come from Dialog.
   return (
-    <div className="settings-overlay" onClick={onClose}>
+    <Dialog className="settings-overlay" labelledBy="settings-title" onClose={onClose} onBackdropClick={onClose}>
       <div className="settings-box panel" onClick={e => e.stopPropagation()}>
-        <div className="settings-title">SYSTEM SETTINGS</div>
+        <div className="settings-title" id="settings-title">SYSTEM SETTINGS</div>
         {TOGGLES.map(row => (
           <div key={row.key} className="settings-row">
             <span className="settings-row-text">
@@ -47,6 +41,8 @@ const SettingsMenu = ({ onClose }: { onClose: () => void }) => {
             <button
               className={`btn settings-toggle ${settings[row.key] ? 'btn-toggled' : ''}`}
               onClick={() => setSetting(row.key, !settings[row.key])}
+              aria-pressed={settings[row.key]}
+              aria-label={row.label}
             >
               {settings[row.key] ? 'ON' : 'OFF'}
             </button>
@@ -60,13 +56,15 @@ const SettingsMenu = ({ onClose }: { onClose: () => void }) => {
           <button
             className={`btn settings-toggle ${!muted ? 'btn-toggled' : ''}`}
             onClick={() => setMuted(sound.toggleMute())}
+            aria-pressed={!muted}
+            aria-label="Sound"
           >
             {muted ? 'OFF' : 'ON'}
           </button>
         </div>
         <button className="btn btn-big settings-close" onClick={onClose}>CLOSE</button>
       </div>
-    </div>
+    </Dialog>
   )
 }
 

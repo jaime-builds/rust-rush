@@ -21,7 +21,7 @@
 - [x] Message type system
 - [x] Connection status display
 - [x] Go server message handlers
-- [x] Room-based multiplayer support
+- [x] Room-based server architecture (one private room per visitor since Nov 3, 2026; multiplayer itself is deprioritized, see Future Enhancements)
 
 ### Phase 4: Tower Visualization
 - [x] Tower rendering on canvas
@@ -291,10 +291,10 @@ Deprioritized July 16, 2026 — moved out of the active roadmap so Phases 19/20/
 - [x] Reduce WebSocket message size ✅ (July 2 — enemy paths no longer serialized (~27% of snapshot payload); envelope wrapping no longer re-parses the snapshot (~7.7× less JSON CPU))
 - [x] Add error boundaries in React ✅ (July 16 overnight — `ui/ErrorBoundary.tsx` wraps GameCanvas and the settings menu; a render crash shows an inline fault panel with RETRY instead of blanking the page)
 - [x] Add server-side validation for tower placement ✅ (was already done in the July 3 session — bounds/occupied/wall/spawn/goal/type all checked in `AddTower`; this checkbox was stale)
-- [ ] Rate limiting for actions — note: `check_placement` (August 19) is the first per-hover message; it self-limits to one request per newly hovered cell, but it is the obvious first candidate if this gets built
-- [ ] Connection recovery on network loss
-- [ ] State synchronization on reconnect
-- [ ] Single-source gameplay constants (tower costs/ranges, enemy glossary are hand-mirrored in the client — consider a server-sent config on join). *Deliberately skipped July 16 overnight: touches the join flow, per-session risk rule.*
+- [x] Rate limiting for actions ✅ (Nov 3, 2026 — 30 messages/s per connection, hover checks 60/s, plus room and connection caps)
+- [x] Connection recovery on network loss ✅ (Nov 3, 2026 — the client retries forever, rejoins on every reconnect, shows OFFLINE with a Reconnect button)
+- [x] State synchronization on reconnect ✅ (Nov 3, 2026 — the tab keeps its room code and resumes the room within the 60 s grace period)
+- [ ] Single-source gameplay constants (tower costs/ranges, enemy glossary are hand-mirrored in the client — consider a server-sent config on join). Partly done Nov 3, 2026: sell, upgrade and evolve prices now come from the server on each tower; buy prices, ranges and glossaries are still mirrored.
 - [x] Delete `game-engine/` (legacy Rust prototype with diverged stats) and `database/` (unused schema) ✅ (July 16 overnight — both fully deleted, doc references in README/SETUP removed; left unstaged for review)
 
 ---
@@ -321,9 +321,7 @@ Deprioritized July 16, 2026 — moved out of the active roadmap so Phases 19/20/
 
 ### Full Release
 - [x] Public deployment (shareable link) ✅ July 30, 2026 — live at `rust-rush.jaime.build`
-- [ ] Multiplayer *(moved to Future Enhancements — deprioritized July 16)*
-- [ ] User accounts *(moved to Future Enhancements — deprioritized July 16)*
-- [ ] Leaderboards *(moved to Future Enhancements — deprioritized July 16)*
+- Multiplayer, user accounts and leaderboards: moved to Future Enhancements (deprioritized July 16), listed there only
 - [ ] Achievements *(moved to Future Enhancements — deprioritized July 16)*
 - [ ] Mobile responsive
 - [ ] Tutorial
@@ -374,7 +372,7 @@ Deprioritized July 16, 2026 — moved out of the active roadmap so Phases 19/20/
 - Stable across 55+ waves ✅
 
 ### Known Issues to Address Next
-- No tower upgrade UI for special stats (slow duration, splash radius not shown in panel)
+- ~~No tower upgrade UI for special stats~~ ✅ (Nov 3, 2026 — the panel shows slow, blast, chain and volley stats, plus a NEXT line previewing the upgrade, both server-sent)
 - No sound
 
 ---

@@ -20,10 +20,23 @@ export interface GameSettings {
   bossBeamDown: boolean
 }
 
+// A player whose system asks for reduced motion starts with the motion
+// effects off. Their saved choices still win, and every toggle stays in the
+// settings menu.
+const prefersReducedMotion = (): boolean => {
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch {
+    return false
+  }
+}
+
+const motionDefault = !prefersReducedMotion()
+
 const DEFAULTS: GameSettings = {
-  screenShake: true,
-  lowHealthPulse: true,
-  bossBeamDown: true,
+  screenShake: motionDefault,
+  lowHealthPulse: motionDefault,
+  bossBeamDown: motionDefault,
 }
 
 const read = (): GameSettings => {

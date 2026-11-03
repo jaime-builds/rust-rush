@@ -981,3 +981,58 @@
   margin-bottom: 16px;
   word-break: break-word;
 }
+
+/* Keyboard focus: a visible ring on every control and on the board itself
+   (the board is focusable for arrow-key play). */
+.btn:focus-visible,
+.tower-btn:focus-visible,
+.map-card:focus-visible,
+.evolve-option:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: 2px;
+}
+.canvas-frame canvas:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: 3px;
+}
+
+.connection-note {
+  margin-left: 6px;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+/* Text for screen readers only (wave and phase announcements). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Upgrade preview: what the next MK level changes. */
+.selected-next {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  gap: 4px 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.selected-next-label {
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  color: var(--gold);
+}
+.selected-next-item {
+  white-space: nowrap;
+}
+.selected-stat .value { white-space: nowrap; }

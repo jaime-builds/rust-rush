@@ -83,12 +83,153 @@ func TestSpawnWaveCancelledByReset(t *testing.T) {
 		close(done)
 	}()
 
-	time.Sleep(50 * time.Millisecond) // let the spawner start its first delay
+	// Reset only once the spawner owns the wave, so the test always covers a
+	// running spawner (a fixed sleep raced the goroutine on a loaded box).
+	if !waitUntil(2*time.Second, func() bool { return room.GetPhase() == PhaseActive }) {
+		t.Fatal("spawner never started the wave")
+	}
 	room.Reset()
 
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("SpawnWave did not exit after Reset")
+	}
+}
+
+// waitUntil polls cond every 5 ms until it holds or timeout passes.
+func waitUntil(timeout time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return true
+}
+
+// RR-01: a room nobody is in closes after the grace period and its loop
+// stops; a room with a player stays, and closes once they leave.
+func TestRoomClosesAfterIdleGrace(t *testing.T) {
+	m := NewManager()
+	m.SetLimits(10, 100*time.Millisecond)
+
+	abandoned, err := m.CreateRoom()
+	if err != nil {
+		t.Fatalf("CreateRoom: %v", err)
+	}
+	occupied, err := m.CreateRoom()
+	if err != nil {
+		t.Fatalf("CreateRoom: %v", err)
+	}
+	m.AddPlayer(occupied.RoomID, "p1")
+
+	if !waitUntil(2*time.Second, func() bool {
+		_, ok := m.GetShootingRoom(abandoned.RoomID)
+		return !ok
+	}) {
+		t.Fatal("empty room still open after the grace period")
+	}
+	time.Sleep(200 * time.Millisecond) // well past the grace period
+	if _, ok := m.GetShootingRoom(occupied.RoomID); !ok {
+		t.Fatal("a room with a player was closed")
+	}
+
+	m.RemovePlayer(occupied.RoomID, "p1")
+	if !waitUntil(2*time.Second, func() bool { return m.RoomCount() == 0 }) {
+		t.Fatalf("room not closed after its last player left (RoomCount=%d)", m.RoomCount())
+	}
+}
+
+// A player who comes back inside the grace period keeps the room.
+func TestRejoinInsideGraceKeepsRoom(t *testing.T) {
+	m := NewManager()
+	m.SetLimits(10, 300*time.Millisecond)
+	room, _ := m.CreateRoom()
+	defer m.DeleteRoom(room.RoomID)
+
+	m.AddPlayer(room.RoomID, "p1")
+	m.RemovePlayer(room.RoomID, "p1")
+	time.Sleep(100 * time.Millisecond)
+	m.AddPlayer(room.RoomID, "p1-again")
+	time.Sleep(400 * time.Millisecond)
+	if _, ok := m.GetShootingRoom(room.RoomID); !ok {
+		t.Fatal("room closed although the player rejoined inside the grace period")
+	}
+}
+
+// RR-01: the room cap holds, and closing a room frees a slot.
+func TestCreateRoomCap(t *testing.T) {
+	m := NewManager()
+	m.SetLimits(2, time.Minute)
+	a, _ := m.CreateRoom()
+	b, _ := m.CreateRoom()
+	defer m.DeleteRoom(b.RoomID)
+	if _, err := m.CreateRoom(); err != ErrTooManyRooms {
+		t.Fatalf("third room: err = %v, want ErrTooManyRooms", err)
+	}
+	m.DeleteRoom(a.RoomID)
+	c, err := m.CreateRoom()
+	if err != nil {
+		t.Fatalf("room after a close: %v", err)
+	}
+	defer m.DeleteRoom(c.RoomID)
+	if a.RoomID == b.RoomID || len(a.RoomID) != 32 {
+		t.Errorf("room codes not unique 128-bit hex: %q %q", a.RoomID, b.RoomID)
+	}
+}
+
+// RR-12: AddPlayer is idempotent.
+func TestAddPlayerIdempotent(t *testing.T) {
+	m := NewManager()
+	room, _ := m.GetOrCreateShootingRoom("r")
+	for i := 0; i < 5; i++ {
+		m.AddPlayer("r", "p1")
+	}
+	if n := len(room.GetSnapshot().Players); n != 1 {
+		t.Errorf("players = %d after 5 adds of one ID, want 1", n)
+	}
+}
+
+// FS-07: a spawner whose wave was cancelled by New Game can't add enemies
+// to, or count down, the new run.
+func TestStaleSpawnerCannotTouchNewRun(t *testing.T) {
+	gs := newTestGame()
+	gs.SetSpawnGoal(Position{X: 0, Y: 7}, Position{X: 19, Y: 7})
+
+	wave, cfg, oldCancel, ok := gs.BeginWave()
+	if !ok || wave != 1 || len(cfg.Enemies) == 0 {
+		t.Fatalf("BeginWave = (%d, %v, ok=%v)", wave, cfg, ok)
+	}
+	if !gs.SpawnForWave(oldCancel, "basic", wave) {
+		t.Fatal("current spawner refused")
+	}
+
+	gs.Reset() // New Game
+	_, _, _, ok = gs.BeginWave()
+	if !ok {
+		t.Fatal("BeginWave refused on the fresh run")
+	}
+	before := gs.GetSnapshot().EnemiesRemaining
+
+	if gs.SpawnForWave(oldCancel, "basic", wave) {
+		t.Error("stale spawner was allowed to spawn")
+	}
+	snap := gs.GetSnapshot()
+	if len(snap.Enemies) != 0 || snap.EnemiesRemaining != before {
+		t.Errorf("stale spawner changed the new run: enemies=%d remaining=%d (want 0, %d)",
+			len(snap.Enemies), snap.EnemiesRemaining, before)
+	}
+}
+
+// BeginWave is the waiting→active gate: a second call is refused.
+func TestBeginWaveRejectsDoubleStart(t *testing.T) {
+	gs := newTestGame()
+	if _, _, _, ok := gs.BeginWave(); !ok {
+		t.Fatal("first BeginWave refused")
+	}
+	if _, _, _, ok := gs.BeginWave(); ok {
+		t.Error("second BeginWave accepted while active")
 	}
 }

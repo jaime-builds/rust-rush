@@ -1,11 +1,11 @@
 # 🚀 Rust Rush - Setup Guide
 
-The live game is two components: a **Go server** (all game logic, WebSocket, static file serving) and a **React + TypeScript client** (rendering and input only). That's it — see [Legacy components](#-legacy-components) for the historical Rust/PostgreSQL artifacts still in the tree.
+The live game is two components: a **Go server** (all game logic, WebSocket, static file serving) and a **React + TypeScript client** (rendering and input only). That's it. (The old Rust/PostgreSQL prototypes were deleted in July 2026.)
 
 ## 📋 Prerequisites
 
-- **Go** 1.21+ → [go.dev/dl](https://go.dev/dl/)
-- **Node.js** 18+ → [nodejs.org](https://nodejs.org/)
+- **Go** 1.25+ → [go.dev/dl](https://go.dev/dl/) (`server/go.mod` requires 1.25)
+- **Node.js** 22.12+ → [nodejs.org](https://nodejs.org/) (Vite 6 and Vitest 4 need it)
 
 Verify installations:
 ```bash
@@ -88,7 +88,14 @@ curl -b jar http://localhost:8080/stats                   # 200 + JSON
 cd server
 go test ./...
 ```
-Runs the game-logic behavior tests, pathfinding equivalence tests, hub concurrency tests, and an end-to-end WebSocket game flow test.
+Runs the game-logic behavior tests, pathfinding equivalence tests, room lifecycle and message handler tests, hub concurrency tests, admin and HTTP tests, and end-to-end WebSocket tests (game flow, room isolation, reconnect). `go test -short ./...` skips the end-to-end tests. `MAP_SIM=1 go test ./internal/game -run TestMapDifficultySimulation -v` runs the map-difficulty measurement harness, which is skipped by default. `go test -race ./...` needs cgo (it runs in CI on Linux).
+
+Client tests (Vitest, pure helpers such as settings and the session room code):
+
+```bash
+cd client
+npm test
+```
 
 ### Client lint + build
 ```bash
@@ -128,17 +135,20 @@ The client connects to `ws://localhost:8080/ws` in dev mode — the Go server mu
 ```
 rust-rush/
 ├── server/               # Go game server — ALL game logic lives here
-│   ├── main.go           # Entry point: WebSocket + static file serving
+│   ├── main.go           # Entry point: routes, graceful shutdown
+│   ├── httpserver.go     # Security headers, static files, 404 page
 │   ├── e2e_test.go       # End-to-end WebSocket game flow test
 │   └── internal/
 │       ├── admin/        # Single-operator login + session gate for /stats
-│       ├── game/         # Game state, waves, pathfinding, game loop
+│       ├── game/         # Game state, waves, pathfinding, room lifecycle and loop
+│       ├── netutil/      # Visitor IP behind Cloudflare, token bucket
 │       ├── stats/        # Private SQLite stats store + /stats handler
 │       └── websocket/    # Hub, client connections, message handlers
 └── client/               # React frontend — rendering and input only
     └── src/
         ├── App.tsx       # WebSocket wiring, state throttling, debug panel
         ├── main.tsx      # Mounts the game, or the admin UI for /admin/*
+        ├── session.ts    # Per-tab room code, New Game stale-frame guard
         ├── settings.ts   # Effect/audio preferences (localStorage-backed)
         ├── audio/
         │   └── sound.ts  # Procedural Web Audio engine (music + SFX)
@@ -151,7 +161,11 @@ rust-rush/
         │   └── stats.ts  # /stats payload shape + admin route paths
         └── ui/
             ├── AdminApp.tsx      # /admin router + login/stats pages
-            └── SettingsMenu.tsx  # Settings modal (4 toggles)
+            ├── AdminLogin.tsx    # Admin login form
+            ├── AdminStats.tsx    # Private stats dashboard
+            ├── Dialog.tsx        # Modal shell: focus, Tab trap, Escape
+            ├── ErrorBoundary.tsx # Inline fault panel instead of a blank page
+            └── SettingsMenu.tsx  # Settings modal (3 effect toggles + sound)
 ```
 
 ---

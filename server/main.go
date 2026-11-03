@@ -2,10 +2,13 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"rust-rush/server/internal/admin"
@@ -30,53 +33,49 @@ func findStaticDir() string {
 	return ""
 }
 
-// serveAdminPage returns index.html for the client-side /admin routes. The
-// game itself is a single page, so http.FileServer alone is enough for it —
-// but /admin/login and /admin/stats are routes the browser can be pointed at
-// directly (deep link, refresh, the footer link), and no such files exist on
-// disk. Without a build (Vite dev workflow) this 404s and the dev server
-// handles the route instead.
-func serveAdminPage(staticDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if staticDir == "" {
-			http.NotFound(w, r)
-			return
-		}
-		http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
+// recordWithRetry writes one stats row, retrying once after a short pause
+// (a busy SQLite file is the realistic failure).
+func recordWithRetry(store *stats.Store, rec stats.GameRecord) error {
+	err := store.RecordGame(rec)
+	if err != nil {
+		time.Sleep(250 * time.Millisecond)
+		err = store.RecordGame(rec)
 	}
+	return err
 }
 
 func main() {
 	log.Println("Starting Rust Rush server...")
 
-	// Create game manager
 	gameManager := game.NewManager()
 
 	// Private stats: one SQLite row per completed game, written on the
-	// game_over transition. STATS_DB overrides the path (production mounts a
-	// volume, e.g. /data/stats.db); default is a file next to the server.
+	// game_over/victory transition. STATS_DB overrides the path (production
+	// mounts a volume, e.g. /data/stats.db); default is a file next to the
+	// server. pendingWrites lets shutdown wait for a write in flight.
 	statsPath := os.Getenv("STATS_DB")
 	if statsPath == "" {
 		statsPath = "stats.db"
 	}
+	var pendingWrites sync.WaitGroup
 	statsStore, err := stats.Open(statsPath)
 	if err != nil {
 		// Stats are a nice-to-have — the game must not die without them.
 		log.Printf("⚠️ Stats disabled — could not open %s: %v", statsPath, err)
 	} else {
-		defer statsStore.Close()
 		log.Printf("Stats database: %s", statsPath)
 		gameManager.SetGameOverHook(func(roomID string, wave, score int, duration float64) {
+			pendingWrites.Add(1)
+			defer pendingWrites.Done()
 			rec := stats.GameRecord{EndedAt: time.Now(), Wave: wave, Score: score, Duration: duration}
-			if err := statsStore.RecordGame(rec); err != nil {
-				log.Printf("⚠️ Failed to record game (room %s): %v", roomID, err)
+			if err := recordWithRetry(statsStore, rec); err != nil {
+				log.Printf("⚠️ Failed to record game: %v", err)
 			} else {
-				log.Printf("📈 Recorded game: room=%s wave=%d score=%d duration=%.0fs", roomID, wave, score, duration)
+				log.Printf("📈 Recorded game: wave=%d score=%d duration=%.0fs", wave, score, duration)
 			}
 		})
 	}
 
-	// Create WebSocket hub
 	hub := websocket.NewHub(gameManager)
 	go hub.Run()
 
@@ -89,28 +88,32 @@ func main() {
 	staticDir := findStaticDir()
 	adminPage := serveAdminPage(staticDir)
 
-	// Setup routes
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		websocket.ServeWs(hub, w, r)
 	})
 
-	// Internal stats endpoint — not linked from the game UI, and now behind
-	// the admin session cookie: 401 without one, which is the client's cue to
-	// bounce to the login page.
+	// Private stats JSON, behind the admin session cookie: 401 without one,
+	// which is the client's cue to bounce to the login page. no-store keeps
+	// it out of browser and Cloudflare caches.
 	if statsStore != nil {
-		http.HandleFunc("/stats", adminAuth.RequireSession(stats.Handler(statsStore, hub.ClientCount)))
+		statsHandler := adminAuth.RequireSession(stats.Handler(statsStore, hub.PlayerCount))
+		mux.HandleFunc("/stats", readOnly(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			statsHandler(w, r)
+		}))
 	}
 
-	// Admin auth API. These paths double as client-side routes, so a non-POST
-	// request is a browser navigating to the page, not an API call.
-	http.HandleFunc("/admin/login", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			adminPage(w, r)
+	// Admin auth API. These paths double as client-side routes, so a GET is a
+	// browser navigating to the page, not an API call.
+	mux.HandleFunc("/admin/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			adminAuth.Login(w, r)
 			return
 		}
-		adminAuth.Login(w, r)
+		adminPage(w, r)
 	})
-	http.HandleFunc("/admin/logout", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/admin/logout", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -119,35 +122,76 @@ func main() {
 		adminAuth.Logout(w, r)
 	})
 	// Everything else under /admin/ (notably /admin/stats) is a client route.
-	http.HandleFunc("/admin/", adminPage)
+	mux.HandleFunc("/admin/", adminPage)
 
-	// Health check endpoint — public and unauthenticated on purpose: the
-	// uptime monitor and the container HEALTHCHECK both poll it.
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
+	// Health check — public on purpose: the uptime monitor and the container
+	// HEALTHCHECK both poll it.
+	mux.HandleFunc("/health", readOnly(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
 		w.Write([]byte("OK"))
-	})
+	}))
 
 	// Serve the production client build if present (npm run build in client/).
 	// Without it the server still runs API-only for the Vite dev workflow.
 	if staticDir != "" {
 		log.Printf("Serving client from %s — open http://localhost:8080", staticDir)
-		http.Handle("/", http.FileServer(http.Dir(staticDir)))
+		mux.Handle("/", staticHandler(staticDir))
 	} else {
 		log.Println("No client build found (client/dist) — API-only mode, use the Vite dev server for the UI")
 	}
 
-	// Start server — PORT env overrides the default (same image runs locally
-	// and behind the tunnel).
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-	addr := ":" + port
-	log.Printf("Server listening on port %s", addr)
-	log.Printf("WebSocket endpoint: ws://localhost%s/ws", addr)
 
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		log.Fatal("ListenAndServe: ", err)
+	// Timeouts: ReadHeaderTimeout stops slow-header connections on the LAN
+	// port; IdleTimeout reaps idle keep-alives. No Read/WriteTimeout — they
+	// would cut long-lived WebSockets, which set their own deadlines.
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           securityHeaders(mux),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		log.Printf("Server listening on port %s", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal("ListenAndServe: ", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Println("Shutting down...")
+
+	// Stop taking requests, tell every open game tab we're going (a close
+	// frame, so the client reconnects at once instead of waiting on a
+	// timeout), let a stats write in flight finish, then close the database.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP shutdown: %v", err)
+	}
+	hub.CloseAll()
+
+	done := make(chan struct{})
+	go func() {
+		pendingWrites.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-shutdownCtx.Done():
+		log.Println("⚠️ Gave up waiting for a stats write")
+	}
+	if statsStore != nil {
+		statsStore.Close()
+	}
+	log.Println("Stopped")
 }

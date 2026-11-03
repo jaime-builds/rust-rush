@@ -1,0 +1,16 @@
+# Keep the build context small and free of local state. The Dockerfile runs
+# its own npm ci and go build, so local installs and builds must never be
+# copied over them.
+.git
+.github
+**/node_modules
+**/dist
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.exe
+**/.env
+**/.env.*
+playtest-shots
+*.md
+!README.md

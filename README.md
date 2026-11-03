@@ -3,7 +3,7 @@
 A high-performance tower defense game built with Go, React, and WebSockets.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Go](https://img.shields.io/badge/go-1.21+-00ADD8.svg)
+![Go](https://img.shields.io/badge/go-1.25+-00ADD8.svg)
 ![React](https://img.shields.io/badge/react-18+-61DAFB.svg)
 ![TypeScript](https://img.shields.io/badge/typescript-5.0+-3178C6.svg)
 
@@ -163,7 +163,9 @@ client renderer all read the same obstacle list per map.
 | 6 | The Crucible | 50 | Central island — mid-wave tower placement can flip traffic between its north and south face |
 
 Maps unlock **one at a time**, in the order above, by beating the previous
-one's win wave. The order was determined by a measured simulation (a
+one's win wave. The lock is cosmetic: progress lives in the browser's
+localStorage, and the server will start any map it's asked for. There are no
+accounts, so a server-side lock would have nothing to key on. The order was determined by a measured simulation (a
 fixed-budget bot played every map at six tower-count levels), not by
 obstacle count — that instinct turned out to be backwards: the zero-obstacle
 Clearway produced a wave-25+ high-score run, while the obstacle-heavy
@@ -179,8 +181,12 @@ far more time on target per enemy.
 | 7–10  | Basic + Fast + Tank |
 | 11+   | Full mix + bosses every wave (one more boss every 3rd wave, max 6), counts scale quadratically |
 
-### 🚧 Coming Next
-- Special stat display in upgrade panel (slow duration, splash radius)
+### Tower panel
+Selecting a tower shows its special stats next to range, damage and rate
+(Stasis slow strength and duration, Mortar blast size and splash share,
+Tesla chain jumps and reach, Barrage volley size), plus a NEXT line listing
+exactly what the next upgrade changes. Both come from the server, so they
+always match what an upgrade actually does.
 
 ## 🏗️ Architecture
 
@@ -209,7 +215,7 @@ far more time on target per enemy.
 ## 🚀 Getting Started
 
 ### Prerequisites
-- **Go** (1.21+): https://go.dev/dl/
+- **Go** (1.25+, the version `server/go.mod` requires): https://go.dev/dl/
 - **Node.js** (18+): https://nodejs.org
 
 ### Quick Start (production — one terminal)
@@ -242,10 +248,21 @@ go run main.go
 > `STATIC_DIR` overrides the location if you move the build elsewhere.
 
 > Also available: a multi-stage `Dockerfile` at the repo root, ready for
-> self-hosting (`STATS_DB`/`ALLOWED_ORIGINS`/`PORT` env vars, all with sane
-> defaults). This is exactly what's running in production — self-hosted on
-> NinjaUnraid, live at https://rust-rush.jaime.build. The Caddy/Tunnel/DNS
-> setup itself is on-server work not tracked in this repo.
+> self-hosting. This is exactly what's running in production, self-hosted on
+> NinjaUnraid and live at https://rust-rush.jaime.build. The Tunnel/DNS setup
+> itself is on-server work not tracked in this repo. Environment variables:
+>
+> | Variable | Default |
+> |---|---|
+> | `PORT` | `8080` |
+> | `STATIC_DIR` | `/app/client/dist` in the image |
+> | `STATS_DB` | `/data/stats.db` in the image |
+> | `ALLOWED_ORIGINS` | unset = any origin (dev); set it to the public URL in production |
+> | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | **no default**: unset locks `/stats` and the admin page |
+> | `DEBUG_SPAWN` | unset = the debug enemy spawner is off; `1` turns it on (never in production) |
+>
+> The container runs as uid 99 / gid 100, so the host folder mounted at
+> `/data` must be owned by `99:100`.
 
 ### Development mode (hot reload)
 
@@ -269,7 +286,9 @@ Client starts on `http://localhost:5173` with hot reload
 ## 🎯 How to Play
 
 1. **Pick a map** — the selection screen shows all 6 in unlock order; only the first is open at the start
-2. **Place towers** — Select a tower type (or press 1-5) and click the grid
+2. **Place towers** — Select a tower type (or press 1-5) and click the grid.
+   Keyboard: Tab to the board, move with the arrow keys, Enter builds or
+   selects; U upgrades and S sells the selected tower; Space starts the wave
 3. **Start Wave** — Click Start Wave or enable Auto Wave
 4. **Earn gold** — Kill enemies to earn gold for more towers
 5. **Upgrade towers** — Click a placed tower and hit Upgrade to boost its stats
@@ -298,10 +317,10 @@ Client starts on `http://localhost:5173` with hot reload
 - Vite for development
 
 ### Backend
-- Go 1.21+ for game server
+- Go 1.25+ for game server
 - Gorilla WebSocket
 - Server-side 60 FPS game loop
-- Room-based architecture
+- One private room per visitor, assigned by the server (a refresh or short drop resumes it for 60 s)
 - SQLite (pure-Go `modernc.org/sqlite` driver — no cgo/C toolchain required) for private stats
 
 ### Algorithms
@@ -421,13 +440,12 @@ cd server && go run main.go
 
 ## 🐛 Known Issues
 
-- Special upgrade stats (slow duration, splash radius) not shown in the tower info panel
 - Admin sessions live in server memory, so a restart logs the operator out
 
 ## 🚀 Future Plans
 
 ### Short Term
-- Special stat display in upgrade panel
+- Nothing queued; see Medium Term
 
 ### Medium Term
 - Different game modes beyond Endless

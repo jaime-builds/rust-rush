@@ -15,6 +15,9 @@
 #     ports: ["8080:8080"]
 #     volumes:
 #       - /mnt/user/appdata/rust-rush:/data
+#     cpus: "2"
+#     mem_limit: 512m
+#     pids_limit: 256
 #     environment:
 #       - ALLOWED_ORIGINS=https://rust-rush.jaime.build
 #       - ADMIN_USERNAME=<from secrets>
@@ -27,6 +30,7 @@
 #   ALLOWED_ORIGINS  comma-separated WS origins       (default: allow all)
 #   ADMIN_USERNAME   admin login user                 (no default — unset closes /stats)
 #   ADMIN_PASSWORD   admin login password             (no default — unset closes /stats)
+#   DEBUG_SPAWN      1 enables the debug enemy spawner (default off; never in production)
 #
 # ADMIN_* have no fallback on purpose: leaving them unset locks the stats page
 # rather than shipping a guessable pair. /health stays public either way.
@@ -45,13 +49,20 @@ WORKDIR /build/server
 COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /rust-rush .
+# -trimpath keeps the build machine's folder paths out of the binary.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /rust-rush .
 
 # --- Stage 3: runtime --------------------------------------------------------
-FROM alpine:3.20
+# Alpine 3.24 is in its support window (3.20 stopped getting fixes in April
+# 2026). The server runs as uid 99 / gid 100, Unraid's usual nobody:users,
+# not root. The /data bind mount on the host must be owned by 99:100 too,
+# or the stats database can't be written (see README.md, Docker note).
+FROM alpine:3.24
 WORKDIR /app
 COPY --from=server /rust-rush ./rust-rush
 COPY --from=client /build/client/dist ./client/dist
+RUN mkdir -p /data && chown 99:100 /data
+USER 99:100
 
 ENV PORT=8080 \
     STATIC_DIR=/app/client/dist \

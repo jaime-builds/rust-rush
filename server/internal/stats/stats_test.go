@@ -112,3 +112,21 @@ func TestHandlerJSON(t *testing.T) {
 		t.Errorf("top_scores = %+v", resp.TopScores)
 	}
 }
+
+// FS-30: a database failure answers 500 with a generic body, never a
+// half-written JSON payload or the driver's error text.
+func TestHandlerReportsQueryFailure(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "stats.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	s.Close() // every query now fails
+	rec := httptest.NewRecorder()
+	Handler(s, func() int { return 0 })(rec, httptest.NewRequest("GET", "/stats", nil))
+	if rec.Code != 500 {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if body := rec.Body.String(); body != "stats query failed\n" {
+		t.Errorf("body = %q, want the generic message only", body)
+	}
+}

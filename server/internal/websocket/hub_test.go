@@ -3,6 +3,7 @@ package websocket
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"rust-rush/server/internal/game"
 )
@@ -66,6 +67,23 @@ func TestHubConcurrentBroadcastAndChurn(t *testing.T) {
 	wg.Wait()
 	for _, c := range lateUnregister {
 		hub.unregister <- c
+	}
+
+	// Every client is gone and every send channel closed exactly once. On a
+	// box without the race detector this is the part that can actually fail.
+	deadline := time.Now().Add(time.Second)
+	for hub.ClientCount() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := hub.ClientCount(); n != 0 {
+		t.Errorf("ClientCount = %d after unregistering everyone, want 0", n)
+	}
+	if n := hub.PlayerCount(); n != 0 {
+		t.Errorf("PlayerCount = %d after unregistering everyone, want 0", n)
+	}
+	for _, c := range lateUnregister {
+		for range c.send { // drains, then ends only if the channel was closed
+		}
 	}
 }
 

@@ -1,537 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './GameCanvas.css'
-import {
-  Tower, TowerType, BaseTowerType, EvolvedTowerType, Enemy, EnemyType, Projectile,
-  MuzzleFlash, Explosion, Arc, Position, GameState, Difficulty, PlacementCheckStore,
-  TOWER_COSTS, EVOLUTION_OPTIONS, GRID_WIDTH, GRID_HEIGHT, CELL_SIZE,
-  GAME_MAPS, GAME_MAPS_BY_SEQUENCE, GameMapInfo,
-} from '../types/game'
+import { Tower, TowerType, BaseTowerType, EvolvedTowerType, Enemy, Projectile, MuzzleFlash, Explosion, Arc, Position, GameState, Difficulty, PlacementCheckStore, TOWER_COSTS, EVOLUTION_OPTIONS, GRID_WIDTH, GRID_HEIGHT, CELL_SIZE, GAME_MAPS, GAME_MAPS_BY_SEQUENCE } from '../types/game'
 import { settings } from '../settings'
-
-// ————————————————————————————————————————————————————————————————————————
-// "NEON IRONLINE" visual theme.
-// The one rule: SHAPE is the discriminator, hue is the garnish. Towers are
-// static closed hardware polygons (cool accents); enemies are pointed,
-// heading-rotated glyphs (warm accents). The design survives grayscale.
-// ————————————————————————————————————————————————————————————————————————
-
-const PALETTE = {
-  bgDeep: '#04070F',
-  bgNavy: '#0A1428',
-  bgGlow: '#10223E',
-  gridMinor: '#101E33',
-  gridMajor: '#16283F',
-  gridNode: '#22395C',
-  wallFillHi: '#0D1A2E',
-  wallFillLo: '#0A1322',
-  wallEdge: '#2E5E8F',
-  wallInner: '#16406B',
-  wallHatch: '#14263E',
-  wallNode: '#46A8FF',
-  hazard: '#B8860B',
-  platefill: '#0B1526',
-  turretMetal: '#0E2230',
-  spawn: '#FF4655',
-  spawnLight: '#FF8A94',
-  goal: '#00E5FF',
-  goalLight: '#7DF3FF',
-  hpHigh: '#35F58C',
-  hpMid: '#FFC533',
-  hpLow: '#FF3B4E',
-  hpTrack: '#0A101C',
-  hpBorder: '#23324D',
-  slowRing: '#3D8BFF',
-  slowCrystal: '#BFE0FF',
-  danger: '#FF4655',
-  text: '#D9E8FF',
-  textDim: '#7C90B0',
-  gold: '#FFD60A',
-  white: '#FFFFFF',
-}
-
-// Tower accents (cool faction) — used by the canvas AND the HTML buttons.
-// Evolved forms stay in their base tower's hue family (hue is the garnish);
-// the new silhouette is what actually announces the evolution.
-const TOWER_COLORS: Record<string, string> = {
-  basic: '#00E5FF',
-  sniper: '#B388FF',
-  splash: '#FFD60A',
-  slow: '#3D8BFF',
-  tesla: '#A8FF3E',
-  breach: '#00C0F0',
-  barrage: '#66F2FF',
-  piercer: '#CBA9FF',
-  executioner: '#8E5CFF',
-  cluster: '#FFE566',
-  siege: '#FFB300',
-  cryo_field: '#7FB8FF',
-  deep_freeze: '#2E7BFF',
-  laser: '#D6FF5E',
-  amplifier: '#6BFFA8',
-}
-
-const TOWER_LIGHT: Record<string, string> = {
-  basic: '#9FF6FF',
-  sniper: '#DCC8FF',
-  splash: '#FFF3B0',
-  slow: '#A6CFFF',
-  tesla: '#E2FFB0',
-  breach: '#8AE8FF',
-  barrage: '#C8FBFF',
-  piercer: '#E8DAFF',
-  executioner: '#C9AFFF',
-  cluster: '#FFF6C4',
-  siege: '#FFDB8A',
-  cryo_field: '#CFE5FF',
-  deep_freeze: '#9FC2FF',
-  laser: '#F0FFB8',
-  amplifier: '#C4FFDD',
-}
-
-// Kept in sync with server towerStatsByType + evolvedStatsByType.
-const TOWER_RANGES: Record<string, number> = {
-  basic: 3.0,
-  sniper: 6.0,
-  splash: 2.5,
-  slow: 3.5,
-  tesla: 4.0,
-  breach: 3.2,
-  barrage: 4.2,
-  piercer: 8.0,
-  executioner: 8.0,
-  cluster: 3.6,
-  siege: 3.6,
-  cryo_field: 4.5,
-  deep_freeze: 4.5,
-  laser: 5.5,
-  amplifier: 3.5,
-}
-
-const TOWER_NAMES: Record<string, string> = {
-  basic: 'Pulse',
-  sniper: 'Railgun',
-  splash: 'Mortar',
-  slow: 'Stasis',
-  tesla: 'Tesla',
-  breach: 'Breach',
-  barrage: 'Barrage',
-  piercer: 'Piercer',
-  executioner: 'Executioner',
-  cluster: 'Cluster',
-  siege: 'Siege',
-  cryo_field: 'Cryo Field',
-  deep_freeze: 'Deep Freeze',
-  laser: 'Laser',
-  amplifier: 'Amplifier',
-}
-
-// One-liners for the evolve dialog and the tower glossary.
-const TOWER_DESCRIPTIONS: Record<string, string> = {
-  basic: 'Reliable workhorse turret — solid damage at a steady rate.',
-  sniper: 'Long-range single-target rail — slow, heavy hits.',
-  splash: 'Lobbed shells splash damage around the impact point.',
-  slow: 'Tags enemies with a stasis field that cuts their speed.',
-  tesla: 'Chain lightning arcs from the target to nearby enemies. Upgrades add arcs and reach.',
-  breach: 'Close-range shredder — much harder hits, faster firing, shorter reach.',
-  barrage: 'Fires a 3-shot volley at separate targets — volume over punch.',
-  piercer: 'The rail shot punches through everything along its line.',
-  executioner: 'Double damage against enemies below 20% health.',
-  cluster: 'Huge blast radius at full splash damage — chokepoint eraser.',
-  siege: 'Massive direct hits; the splash shrinks to a pinpoint.',
-  cryo_field: 'Constant slow field — everything in range crawls at 40% speed. Fires nothing.',
-  deep_freeze: 'Severe single-target slow, with a 25% chance to freeze solid for 1.5s.',
-  laser: 'Continuous beam — 60 damage per second, no travel time.',
-  amplifier: 'Deals no damage; nearby towers gain +25% damage and fire rate.',
-}
-
-// Enemy accents (warm faction) — single source for canvas + legend + preview.
-const ENEMY_COLORS: Record<string, string> = {
-  basic: '#FF4655',
-  fast: '#FF9E2C',
-  tank: '#C7502E',
-  flying: '#44ff99',
-  boss: '#FF2ED2',
-}
-
-const ENEMY_BODY: Record<string, string> = {
-  basic: '#2A0E14',
-  fast: '#291606',
-  tank: '#200D08',
-  flying: '#0E2A1C',
-  boss: '#230A1E',
-}
-
-// Visual radius per enemy type (px) — drives reticles, bars, stasis cages.
-const ENEMY_RADIUS: Record<string, number> = {
-  basic: 10,
-  fast: 9,
-  tank: 15,
-  flying: 10,
-  boss: 18,
-}
-
-// Enemy stat sheet — kept in sync with server getEnemyStats/getEnemyGoldReward/getEnemyScorePoints.
-// 'flying' is omitted: it exists in server stats but never spawns in any wave.
-const ENEMY_GLOSSARY: { type: EnemyType, name: string, health: number, speed: number, gold: number, score: number, appears: string }[] = [
-  { type: 'basic', name: 'Dart', health: 100, speed: 2.0, gold: 10, score: 10, appears: 'Wave 1+' },
-  { type: 'fast', name: 'Needle', health: 50, speed: 4.0, gold: 8, score: 15, appears: 'Wave 4+' },
-  { type: 'tank', name: 'Bastion', health: 300, speed: 1.0, gold: 25, score: 30, appears: 'Wave 7+' },
-  { type: 'boss', name: 'Dreadnought', health: 1000, speed: 0.5, gold: 100, score: 100, appears: 'Wave 11+' },
-]
-
-// Tower stat sheet — kept in sync with server towerStatsByType / UpgradeTower.
-const TOWER_GLOSSARY: { type: BaseTowerType, damage: number, rate: number, upgradeNote: string }[] = [
-  { type: 'basic', damage: 15, rate: 1.0, upgradeNote: 'MK2–4: +20% dmg, +10% range per level' },
-  { type: 'sniper', damage: 50, rate: 0.5, upgradeNote: 'MK2–4: +20% dmg, +10% range per level' },
-  { type: 'splash', damage: 10, rate: 1.5, upgradeNote: 'MK2–4: +20% dmg, +10% range; blast 1.5u/60% → 2.4u/90%' },
-  { type: 'slow', damage: 8, rate: 0.8, upgradeNote: 'MK2–4: +20% dmg, +10% range; slow 2.0s/0.40× → 3.5s/0.25×' },
-  { type: 'tesla', damage: 20, rate: 0.8, upgradeNote: 'MK2–4: +20% dmg, +10% range; chain 2×/1.5u → 5×/2.1u' },
-]
-
-// Evolution stat lines — kept in sync with server evolvedStatsByType.
-const EVO_STATS: Record<EvolvedTowerType, string> = {
-  breach: '55 dmg · 1.4/s · 3.2 rng',
-  barrage: '18 dmg ×3 shots · 1.2/s · 4.2 rng',
-  piercer: '70 dmg thru-line · 0.5/s · 8.0 rng',
-  executioner: '95 dmg, ×2 under 20% HP · 0.6/s · 8.0 rng',
-  cluster: '14 dmg · 3.5u blast @ 100% · 1.5/s',
-  siege: '60 dmg · 1.2u blast @ 60% · 1.0/s',
-  cryo_field: 'no attack · 4.5u field · 40% speed',
-  deep_freeze: '15 dmg · 0.25× slow · 25% root 1.5s',
-  laser: '60 dmg/s beam · 5.5 rng',
-  amplifier: 'no attack · 3.5u aura · +25% dmg & rate',
-}
-
-// Tower hotkey/button order — keys 1-5 map to this, matching the on-screen
-// button row (Pulse, Railgun, Mortar, Stasis, Tesla).
-const TOWER_ORDER: BaseTowerType[] = ['basic', 'sniper', 'splash', 'slow', 'tesla']
-
-const HIGH_SCORE_KEY = 'rustRushHighScore'
-
-const readHighScore = (): number => {
-  try {
-    const parsed = parseInt(localStorage.getItem(HIGH_SCORE_KEY) ?? '0', 10)
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
-  } catch {
-    return 0
-  }
-}
-
-// Map progression unlock state: the single "furthest map beaten" integer
-// (0 = nothing beaten, only sequence position 1 selectable; 6 = everything
-// beaten). Same localStorage pattern as the high score. A map is selectable
-// when its sequenceOrder ≤ furthest-beaten + 1.
-const FURTHEST_BEATEN_KEY = 'rustRushFurthestMapBeaten'
-
-const readFurthestBeaten = (): number => {
-  try {
-    const parsed = parseInt(localStorage.getItem(FURTHEST_BEATEN_KEY) ?? '0', 10)
-    if (!Number.isFinite(parsed)) return 0
-    return Math.min(Math.max(parsed, 0), GAME_MAPS.length)
-  } catch {
-    return 0
-  }
-}
-
-// ————————————————————————————————————————————————————————————————————————
-// Cached geometry (Path2D, local coords, forward = +x) and glow sprites.
-// Built once at module load; per-entity drawing is translate/rotate + fill.
-// ————————————————————————————————————————————————————————————————————————
-
-const polyPath = (pts: number[][]): Path2D => {
-  const p = new Path2D()
-  p.moveTo(pts[0][0], pts[0][1])
-  for (let i = 1; i < pts.length; i++) p.lineTo(pts[i][0], pts[i][1])
-  p.closePath()
-  return p
-}
-
-const regularPolyPath = (r: number, sides: number, rot = 0): Path2D => {
-  const pts: number[][] = []
-  for (let i = 0; i < sides; i++) {
-    const a = rot + (i * 2 * Math.PI) / sides
-    pts.push([r * Math.cos(a), r * Math.sin(a)])
-  }
-  return polyPath(pts)
-}
-
-const scalePts = (pts: number[][], s: number) => pts.map(([x, y]) => [x * s, y * s])
-
-const TANK_HULL = [[15, 0], [7, -11], [-10, -11], [-15, 0], [-10, 11], [7, 11]]
-
-// starPolyPath alternates between two radii — snowflake/spark plates.
-const starPolyPath = (rOuter: number, rInner: number, points: number, rot = 0): Path2D => {
-  const pts: number[][] = []
-  for (let i = 0; i < points * 2; i++) {
-    const r = i % 2 === 0 ? rOuter : rInner
-    const a = rot + (i * Math.PI) / points
-    pts.push([r * Math.cos(a), r * Math.sin(a)])
-  }
-  return polyPath(pts)
-}
-
-// Cross/plus plate (Tesla): arm half-width w, arm length L.
-const crossPts = (L: number, w: number) => [
-  [L, -w], [w, -w], [w, -L], [-w, -L], [-w, -w], [-L, -w],
-  [-L, w], [-w, w], [-w, L], [w, L], [w, w], [L, w],
-]
-
-// Every tower base is a distinct closed silhouette — SHAPE is the
-// discriminator. The ten evolved plates are deliberately louder geometry than
-// the base five: the evolution moment is where the visual payoff lives.
-const SHAPES = {
-  towerBase: {
-    basic: regularPolyPath(14, 8, Math.PI / 8),
-    sniper: polyPath([[0, -15], [15, 0], [0, 15], [-15, 0]]),
-    splash: polyPath([[-14, -9], [-9, -14], [9, -14], [14, -9], [14, 9], [9, 14], [-9, 14], [-14, 9]]),
-    slow: regularPolyPath(14, 6, -Math.PI / 2),
-    tesla: polyPath(crossPts(15, 6)),
-    // Pulse forks
-    breach: regularPolyPath(15, 5, -Math.PI / 2),                                  // pentagon — forward mass
-    barrage: polyPath([[-15, -10], [15, -10], [10, 12], [-10, 12]]),               // wide battery trapezoid
-    // Railgun forks
-    piercer: polyPath([[17, 0], [9, -8], [-9, -8], [-17, 0], [-9, 8], [9, 8]]),    // elongated lens
-    executioner: regularPolyPath(15, 5, Math.PI / 2),                              // inverted pentagon — the blade
-    // Mortar forks
-    cluster: regularPolyPath(14, 12, Math.PI / 12),                                // round drum
-    siege: polyPath([[-13, -13], [13, -13], [13, 13], [-13, 13]]),                 // square bastion
-    // Stasis forks
-    cryo_field: starPolyPath(15, 8, 6, -Math.PI / 2),                              // snowflake plate
-    deep_freeze: polyPath([[0, -17], [9, -8], [9, 8], [0, 17], [-9, 8], [-9, -8]]), // tall crystal
-    // Tesla forks
-    laser: regularPolyPath(13, 16),                                                // lens ring
-    amplifier: regularPolyPath(15, 3, -Math.PI / 2),                               // broadcast pylon
-  } as Record<string, Path2D>,
-  towerBaseInset: {
-    basic: regularPolyPath(12, 8, Math.PI / 8),
-    sniper: polyPath([[0, -13], [13, 0], [0, 13], [-13, 0]]),
-    splash: polyPath(scalePts([[-14, -9], [-9, -14], [9, -14], [14, -9], [14, 9], [9, 14], [-9, 14], [-14, 9]], 12 / 14)),
-    slow: regularPolyPath(12, 6, -Math.PI / 2),
-    tesla: polyPath(scalePts(crossPts(15, 6), 12 / 15)),
-  } as Record<string, Path2D>,
-  enemy: {
-    basic: polyPath([[10, 0], [-8, -7], [-4, 0], [-8, 7]]),
-    fast: polyPath([[11, 0], [-7, -5], [-2, 0], [-7, 5]]),
-    tank: polyPath(TANK_HULL),
-    tankInner: polyPath(scalePts(TANK_HULL, 0.62)),
-    flying: polyPath([[9, 0], [0, -6], [-9, 0], [0, 6]]),
-    boss: regularPolyPath(12, 8, Math.PI / 8),
-  } as Record<string, Path2D>,
-}
-
-const glowSpriteCache = new Map<string, HTMLCanvasElement>()
-const hexAlpha = (hex: string, a: number): string => {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return `rgba(${r}, ${g}, ${b}, ${a})`
-}
-
-const glowSprite = (color: string): HTMLCanvasElement => {
-  let s = glowSpriteCache.get(color)
-  if (!s) {
-    s = document.createElement('canvas')
-    s.width = 32
-    s.height = 32
-    const g = s.getContext('2d')!
-    const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16)
-    grad.addColorStop(0, hexAlpha(color, 0.55))
-    grad.addColorStop(0.35, hexAlpha(color, 0.2))
-    grad.addColorStop(1, hexAlpha(color, 0))
-    g.fillStyle = grad
-    g.fillRect(0, 0, 32, 32)
-    glowSpriteCache.set(color, s)
-  }
-  return s
-}
-
-const roundRectPath = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
-  ctx.beginPath()
-  ctx.moveTo(x + r, y)
-  ctx.arcTo(x + w, y, x + w, y + h, r)
-  ctx.arcTo(x + w, y + h, x, y + h, r)
-  ctx.arcTo(x, y + h, x, y, r)
-  ctx.arcTo(x, y, x + w, y, r)
-  ctx.closePath()
-}
-
-// ————————————————————————————————————————————————————————————————————————
-// Phase 19 effect helpers. All three effects are deliberately cheap: no
-// particle systems, no per-frame allocations beyond one gradient on the
-// (rare) boss beam.
-// ————————————————————————————————————————————————————————————————————————
-
-// Tower materialize: scale-up from nothing with a slight overshoot so the
-// pop reads as "locking into place". ~180ms, one tower at a time.
-const PLACE_ANIM_MS = 180
-const easeOutBack = (p: number): number => {
-  const c = 1.2 // gentler than the textbook 1.70158 — a nudge, not a bounce
-  const q = p - 1
-  return 1 + (c + 1) * q * q * q + c * q * q
-}
-
-// Boss beam-down: total effect length; the boss itself fades in over the
-// back portion once the streak has mostly collapsed.
-const BEAM_MS = 500
-const BEAM_BOSS_FADE_START = 0.45
-
-// Low-health red pulse: "health below 5" in the Phase 19 spec, read in board
-// terms — every leak costs exactly 10 health (health only ever moves in -10
-// steps from 100), so "below 5" = fewer than 5 remaining hits = health < 50.
-// A literal health<5 is unreachable while alive.
-const LOW_HEALTH_PULSE_THRESHOLD = 50
-// One continuous slow breath — time-based, so further leaks while already
-// low never restart or intensify it. Peak alpha stays under 0.1 on an
-// edges-only vignette: deliberately "too subtle" per the design call.
-const LOW_HEALTH_PULSE_PERIOD_S = 3.2
-
-let alertVignetteCache: HTMLCanvasElement | null = null
-const alertVignette = (w: number, h: number): HTMLCanvasElement => {
-  if (!alertVignetteCache || alertVignetteCache.width !== w || alertVignetteCache.height !== h) {
-    const c = document.createElement('canvas')
-    c.width = w
-    c.height = h
-    const g = c.getContext('2d')!
-    const grad = g.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.38, w / 2, h / 2, Math.max(w, h) * 0.62)
-    grad.addColorStop(0, 'rgba(255, 59, 78, 0)')
-    grad.addColorStop(1, 'rgba(255, 59, 78, 0.85)')
-    g.fillStyle = grad
-    g.fillRect(0, 0, w, h)
-    alertVignetteCache = c
-  }
-  return alertVignetteCache
-}
-
-// Screen shake: two incommensurate sine waves, quadratic decay. Small and
-// short by design — it fires on health loss only (a rare, meaningful event),
-// never on tower hits.
-const SHAKE_MS = 280
-const SHAKE_AMP_PX = 3.5
-
-const shortestAngleDelta = (a: number): number => {
-  let d = a % (Math.PI * 2)
-  if (d > Math.PI) d -= Math.PI * 2
-  if (d < -Math.PI) d += Math.PI * 2
-  return d
-}
-
-// ————————————————————————————————————————————————————————————————————————
-// Inline SVG silhouettes — the HTML buttons and legends share the canvas
-// shape language, so the UI teaches shapes, not hues.
-// ————————————————————————————————————————————————————————————————————————
-
-const TowerIcon = ({ type, size = 20 }: { type: TowerType, size?: number }) => {
-  const c = TOWER_COLORS[type]
-  const common = { fill: PALETTE.platefill, stroke: c, strokeWidth: 2 }
-  return (
-    <svg width={size} height={size} viewBox="-20 -20 40 40" aria-hidden="true">
-      {type === 'basic' && (<>
-        <polygon points="12.9,5.4 5.4,12.9 -5.4,12.9 -12.9,5.4 -12.9,-5.4 -5.4,-12.9 5.4,-12.9 12.9,-5.4" {...common} />
-        <rect x="2" y="-3" width="15" height="6" fill={c} stroke="none" />
-      </>)}
-      {type === 'sniper' && (<>
-        <polygon points="0,-15 15,0 0,15 -15,0" {...common} />
-        <rect x="1" y="-3" width="18" height="2" fill={c} stroke="none" />
-        <rect x="1" y="1" width="18" height="2" fill={c} stroke="none" />
-      </>)}
-      {type === 'splash' && (<>
-        <polygon points="-14,-9 -9,-14 9,-14 14,-9 14,9 9,14 -9,14 -14,9" {...common} />
-        <rect x="0" y="-5" width="12" height="10" fill={c} stroke="none" />
-      </>)}
-      {type === 'slow' && (<>
-        <polygon points="0,-14 12.1,-7 12.1,7 0,14 -12.1,7 -12.1,-7" {...common} />
-        <polygon points="5,-2.5 14,0 5,2.5" fill={c} stroke="none" />
-        <polygon points="-1.3,3.9 -7,12.1 -4.6,2.9" fill={c} stroke="none" />
-        <polygon points="-4.6,-2.9 -7,-12.1 -1.3,-3.9" fill={c} stroke="none" />
-      </>)}
-      {type === 'tesla' && (<>
-        <polygon points="15,-6 6,-6 6,-15 -6,-15 -6,-6 -15,-6 -15,6 -6,6 -6,15 6,15 6,6 15,6" {...common} />
-        <polyline points="-3,-8 3,-2 -2,0 4,8" fill="none" stroke={c} strokeWidth="2" />
-      </>)}
-      {type === 'breach' && (<>
-        <polygon points="0,-15 14.3,-4.6 8.8,12.1 -8.8,12.1 -14.3,-4.6" {...common} />
-        <rect x="2" y="-6" width="13" height="4.5" fill={c} stroke="none" />
-        <rect x="2" y="1.5" width="13" height="4.5" fill={c} stroke="none" />
-      </>)}
-      {type === 'barrage' && (<>
-        <polygon points="-15,-10 15,-10 10,12 -10,12" {...common} />
-        <rect x="3" y="-7" width="12" height="3" fill={c} stroke="none" transform="rotate(-12)" />
-        <rect x="3" y="-1.5" width="12" height="3" fill={c} stroke="none" />
-        <rect x="3" y="4" width="12" height="3" fill={c} stroke="none" transform="rotate(12)" />
-      </>)}
-      {type === 'piercer' && (<>
-        <polygon points="17,0 9,-8 -9,-8 -17,0 -9,8 9,8" {...common} />
-        <rect x="-14" y="-1.25" width="33" height="2.5" fill={c} stroke="none" />
-      </>)}
-      {type === 'executioner' && (<>
-        <polygon points="0,15 -14.3,4.6 -8.8,-12.1 8.8,-12.1 14.3,4.6" {...common} />
-        <rect x="0" y="-2" width="12" height="4" fill={c} stroke="none" />
-        <polygon points="11,-6 19,0 11,6" fill={c} stroke="none" />
-      </>)}
-      {type === 'cluster' && (<>
-        <polygon points="13.5,3.6 9.9,9.9 3.6,13.5 -3.6,13.5 -9.9,9.9 -13.5,3.6 -13.5,-3.6 -9.9,-9.9 -3.6,-13.5 3.6,-13.5 9.9,-9.9 13.5,-3.6" {...common} />
-        <circle cx="6" cy="-4" r="2" fill={c} />
-        <circle cx="8" cy="1" r="2" fill={c} />
-        <circle cx="5" cy="6" r="2" fill={c} />
-      </>)}
-      {type === 'siege' && (<>
-        <rect x="-13" y="-13" width="26" height="26" {...common} />
-        <rect x="0" y="-5.5" width="16" height="11" fill={c} stroke="none" />
-      </>)}
-      {type === 'cryo_field' && (<>
-        <polygon points="0,-15 4,-6.9 13,-7.5 8,0 13,7.5 4,6.9 0,15 -4,6.9 -13,7.5 -8,0 -13,-7.5 -4,-6.9" {...common} />
-        <circle r="3" fill={c} />
-      </>)}
-      {type === 'deep_freeze' && (<>
-        <polygon points="0,-17 9,-8 9,8 0,17 -9,8 -9,-8" {...common} />
-        <polyline points="-4,-8 3,0 -3,8" fill="none" stroke={c} strokeWidth="2" />
-      </>)}
-      {type === 'laser' && (<>
-        <circle r="13" {...common} />
-        <circle r="5" fill="none" stroke={c} strokeWidth="2" />
-        <circle r="1.75" fill={c} />
-      </>)}
-      {type === 'amplifier' && (<>
-        <polygon points="0,-15 13,7.5 -13,7.5" {...common} />
-        <polygon points="0,-8 7,4.5 -7,4.5" fill="none" stroke={c} strokeWidth="1.5" />
-        <circle cy="1" r="2" fill={c} />
-      </>)}
-    </svg>
-  )
-}
-
-const EnemyGlyph = ({ type, size = 14 }: { type: string, size?: number }) => {
-  const c = ENEMY_COLORS[type] ?? PALETTE.danger
-  const body = ENEMY_BODY[type] ?? '#1A0A0E'
-  return (
-    <svg width={size} height={size} viewBox="-16 -16 32 32" aria-hidden="true">
-      {type === 'basic' && <polygon points="10,0 -8,-7 -4,0 -8,7" fill={body} stroke={c} strokeWidth="2" />}
-      {type === 'fast' && <polygon points="13,0 -9,-6 -3,0 -9,6" fill={body} stroke={c} strokeWidth="2" />}
-      {type === 'tank' && (<>
-        <polygon points="12,0 5.6,-8.8 -8,-8.8 -12,0 -8,8.8 5.6,8.8" fill={body} stroke={c} strokeWidth="2" />
-        <polygon points="7.4,0 3.5,-5.5 -5,-5.5 -7.4,0 -5,5.5 3.5,5.5" fill="none" stroke={c} strokeWidth="1" opacity="0.7" />
-      </>)}
-      {type === 'boss' && (<>
-        <polygon points="9.2,3.8 3.8,9.2 -3.8,9.2 -9.2,3.8 -9.2,-3.8 -3.8,-9.2 3.8,-9.2 9.2,-3.8" fill={body} stroke={c} strokeWidth="2" />
-        <circle r="2.5" fill="#FFFFFF" />
-      </>)}
-    </svg>
-  )
-}
-
-// MapThumb — miniature schematic of one map for the selection screen: the
-// 20×15 board with wall cells, spawn, and goal. Drawn from the client-side
-// GAME_MAPS mirror (previews only — in-game walls come from the server).
-const MapThumb = ({ map }: { map: GameMapInfo }) => (
-  <svg viewBox="0 0 20 15" className="map-thumb" aria-hidden="true">
-    <rect x="0" y="0" width="20" height="15" fill={PALETTE.bgDeep} />
-    {map.obstacles.map((o, i) => (
-      <rect key={i} x={o.x} y={o.y} width="1" height="1" fill={PALETTE.wallEdge} />
-    ))}
-    <rect x="0" y="7" width="1" height="1" fill={PALETTE.spawn} />
-    <rect x="19" y="7" width="1" height="1" fill={PALETTE.goal} />
-  </svg>
-)
+import Dialog from '../ui/Dialog'
+import { PALETTE, TOWER_COLORS, TOWER_LIGHT, TOWER_RANGES, TOWER_NAMES, TOWER_DESCRIPTIONS, ENEMY_COLORS, ENEMY_BODY, ENEMY_RADIUS, ENEMY_GLOSSARY, TOWER_GLOSSARY, EVO_STATS, TOWER_ORDER } from './theme'
+import { HIGH_SCORE_KEY, readHighScore, FURTHEST_BEATEN_KEY, readFurthestBeaten } from './progress'
+import { polyPath, regularPolyPath, SHAPES, memoPath, hexAlpha, glowSprite, roundRectPath } from './shapes'
+import { PLACE_ANIM_MS, easeOutBack, BEAM_MS, BEAM_BOSS_FADE_START, LOW_HEALTH_PULSE_THRESHOLD, LOW_HEALTH_PULSE_PERIOD_S, alertVignette, SHAKE_MS, SHAKE_AMP_PX, shortestAngleDelta } from './effects'
+import { TowerIcon, EnemyGlyph, MapThumb } from './icons'
+import { nextLevelChanges, specialStats } from './towerStats'
 
 interface GameCanvasProps {
   isConnected: boolean
@@ -613,7 +90,16 @@ const GameCanvas = ({
   const [evolveChoice, setEvolveChoice] = useState<EvolvedTowerType | null>(null)
   const [autoWave, setAutoWave] = useState(false)
   const [countdown, setCountdown] = useState<number | null>(null)
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Auto Wave timers live in refs owned by the countdown effect; SEND NOW
+  // clears the countdown one and arms the re-arm one.
+  const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const rearmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Bumped when a start we sent didn't take (the server refused it, so the
+  // phase stayed waiting): restarts the countdown instead of stalling.
+  const [autoRearm, setAutoRearm] = useState(0)
+  // Keyboard play: whether the board cursor came from the keyboard (so the
+  // canvas keeps a cursor drawn while focused even if the mouse is elsewhere).
+  const keyboardCursorRef = useRef(false)
   const [highScore, setHighScore] = useState<number>(() => readHighScore())
   const [isNewHighScore, setIsNewHighScore] = useState(false)
   const prevPhaseRef = useRef<string>('waiting')
@@ -765,34 +251,42 @@ const GameCanvas = ({
     prevVictoryRef.current = isVictory
   }, [isVictory, gameState?.map_id, furthestBeaten])
 
-  // Auto wave countdown logic
+  // Auto Wave: a 5 s countdown as a timeout chain. The start is sent from
+  // the timer callback, never inside a React state updater (React may run
+  // updaters twice, which could send two starts). If the wave hasn't started
+  // 2 s after we asked (the server refused), the countdown re-arms instead of
+  // stalling silently. The effect re-runs, cancelling everything, whenever
+  // the wave starts, the run ends, or Auto is switched off.
   useEffect(() => {
-    if (!autoWave || isWaveActive || isRunOver || !isConnected) return
-
-    setCountdown(5)
-    const tick = setInterval(() => {
-      setCountdown(prev => {
-        if (prev === null || prev <= 1) {
-          clearInterval(tick)
-          setCountdown(null)
-          onStartWave()
-          return null
-        }
-        return prev - 1
-      })
-    }, 1000)
-
-    countdownRef.current = tick
-    return () => clearInterval(tick)
-  }, [autoWave, isWaveActive, isRunOver, isConnected, onStartWave])
-
-  // Clear countdown if wave starts manually or the run ends
-  useEffect(() => {
-    if (isWaveActive || isRunOver) {
-      if (countdownRef.current) clearInterval(countdownRef.current)
-      setCountdown(null)
+    const clearTimers = () => {
+      if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current)
+      if (rearmTimerRef.current) clearTimeout(rearmTimerRef.current)
+      countdownTimerRef.current = null
+      rearmTimerRef.current = null
     }
-  }, [isWaveActive, isRunOver])
+    if (!autoWave || isWaveActive || isRunOver || !isConnected) {
+      clearTimers()
+      setCountdown(null)
+      return
+    }
+
+    let remaining = 5
+    setCountdown(remaining)
+    const tick = () => {
+      remaining -= 1
+      if (remaining > 0) {
+        setCountdown(remaining)
+        countdownTimerRef.current = setTimeout(tick, 1000)
+        return
+      }
+      countdownTimerRef.current = null
+      setCountdown(null)
+      onStartWave()
+      rearmTimerRef.current = setTimeout(() => setAutoRearm(n => n + 1), 2000)
+    }
+    countdownTimerRef.current = setTimeout(tick, 1000)
+    return clearTimers
+  }, [autoWave, isWaveActive, isRunOver, isConnected, onStartWave, autoRearm])
 
   // Persist high score on the transition into either terminal phase — a win
   // ends the run with a final score exactly like a loss does (and a victory
@@ -844,17 +338,19 @@ const GameCanvas = ({
   }, [gameState?.towers, selectedTower])
 
   // Hotkeys: 1-5 select the base towers in button order, Escape deselects
-  // to NONE (same as the ∅ button). Guarded against focused text inputs so
-  // a future settings/chat field can't fire tower selection while typing.
+  // to NONE (same as the ∅ button), U upgrades and S sells the selected
+  // tower, Space starts the wave. Guarded against focused text inputs, and
+  // against any open dialog (settings, map select): keys belong to the
+  // dialog then, never to the board underneath. The actions read the latest
+  // render through hotkeyActionsRef, so the listener is bound once.
+  const hotkeyActionsRef = useRef({ upgrade: () => {}, sell: () => {}, startWave: () => {} })
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return
       const el = e.target as HTMLElement | null
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
       if (isRunOver) return
-      // While the settings modal is open, Escape belongs to it (close wins
-      // over deselect) and number keys shouldn't reach the board either.
-      if (document.querySelector('.settings-overlay')) return
+      if (document.querySelector('[role="dialog"]')) return
       if (e.key === 'Escape') {
         setSelectedTowerType(null)
         setSelectedTower(null)
@@ -863,6 +359,17 @@ const GameCanvas = ({
       if (e.key >= '1' && e.key <= '5') {
         setSelectedTowerType(TOWER_ORDER[Number(e.key) - 1])
         setSelectedTower(null)
+        return
+      }
+      const key = e.key.toLowerCase()
+      if (key === 'u') {
+        hotkeyActionsRef.current.upgrade()
+      } else if (key === 's') {
+        hotkeyActionsRef.current.sell()
+      } else if (e.key === ' ' && el?.tagName !== 'BUTTON') {
+        // Space on a focused button presses that button; leave it alone.
+        e.preventDefault() // don't scroll the page
+        hotkeyActionsRef.current.startWave()
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -1334,7 +841,7 @@ const GameCanvas = ({
     ctx.rotate(t * 0.9)
     ctx.strokeStyle = PALETTE.spawnLight
     ctx.lineWidth = 1.5
-    ctx.stroke(regularPolyPath(8, 6, 0))
+    ctx.stroke(memoPath('hex8', () => regularPolyPath(8, 6, 0)))
     ctx.restore()
     // Pulse ring.
     ctx.globalAlpha = 0.35
@@ -1375,7 +882,7 @@ const GameCanvas = ({
     ctx.rotate(-t * 0.9 * rate)
     ctx.strokeStyle = light
     ctx.lineWidth = 1.5
-    ctx.stroke(regularPolyPath(8, 6, 0))
+    ctx.stroke(memoPath('hex8', () => regularPolyPath(8, 6, 0)))
     ctx.restore()
     ctx.globalAlpha = 0.35
     ctx.strokeStyle = accent
@@ -1711,7 +1218,7 @@ const GameCanvas = ({
           for (let i = 0; i < 3; i++) {
             ctx.save()
             ctx.rotate((i * 2 * Math.PI) / 3)
-            const vane = polyPath([[6, -3], [15, 0], [6, 3]])
+            const vane = memoPath('vane', () => polyPath([[6, -3], [15, 0], [6, 3]]))
             ctx.fill(vane)
             ctx.stroke(vane)
             ctx.restore()
@@ -1805,7 +1312,7 @@ const GameCanvas = ({
           // Rail plus a blade at the muzzle.
           ctx.fillStyle = accent
           ctx.fillRect(2, -2, 18, 4)
-          const blade = polyPath([[19, -6], [28, 0], [19, 6]])
+          const blade = memoPath('blade', () => polyPath([[19, -6], [28, 0], [19, 6]]))
           ctx.fillStyle = light
           ctx.fill(blade)
           ctx.strokeStyle = accent
@@ -1857,14 +1364,14 @@ const GameCanvas = ({
         }
         case 'deep_freeze': {
           // One large crystal lance plus side shards.
-          const lance = polyPath([[3, -4.5], [19, 0], [3, 4.5], [0, 0]])
+          const lance = memoPath('lance', () => polyPath([[3, -4.5], [19, 0], [3, 4.5], [0, 0]]))
           ctx.fillStyle = light
           ctx.fill(lance)
           ctx.strokeStyle = accent
           ctx.lineWidth = 1.5
           ctx.stroke(lance)
           for (const sy of [-1, 1]) {
-            const shard = polyPath([[2, sy * 5], [9, sy * 9], [5, sy * 4]])
+            const shard = memoPath(`lanceShard:${sy}`, () => polyPath([[2, sy * 5], [9, sy * 9], [5, sy * 4]]))
             ctx.fillStyle = hexAlpha(light, 0.7)
             ctx.fill(shard)
           }
@@ -1958,7 +1465,7 @@ const GameCanvas = ({
       ctx.rotate(-t * 0.6)
       ctx.strokeStyle = hexAlpha(accent, 0.9)
       ctx.lineWidth = 1.5
-      ctx.stroke(regularPolyPath(8, 3, -Math.PI / 2))
+      ctx.stroke(memoPath('tri8', () => regularPolyPath(8, 3, -Math.PI / 2)))
       ctx.restore()
       ctx.save()
       ctx.globalCompositeOperation = 'lighter'
@@ -2108,7 +1615,7 @@ const GameCanvas = ({
     if (isRooted) {
       ctx.save()
       ctx.translate(x, y)
-      const block = regularPolyPath(R + 6, 6, -Math.PI / 2)
+      const block = memoPath(`iceBlock:${R}`, () => regularPolyPath(R + 6, 6, -Math.PI / 2))
       ctx.fillStyle = 'rgba(159, 194, 255, 0.28)'
       ctx.fill(block)
       ctx.strokeStyle = TOWER_LIGHT.deep_freeze
@@ -2120,12 +1627,12 @@ const GameCanvas = ({
         const a = -Math.PI / 2 + (i * Math.PI) / 3
         const bx = (R + 6) * Math.cos(a)
         const by = (R + 6) * Math.sin(a)
-        const spike = polyPath([
+        const spike = memoPath(`spike:${R}:${i}`, () => polyPath([
           [bx, by],
           [bx + 4 * Math.cos(a - 0.35), by + 4 * Math.sin(a - 0.35)],
           [bx + 6 * Math.cos(a), by + 6 * Math.sin(a)],
           [bx + 4 * Math.cos(a + 0.35), by + 4 * Math.sin(a + 0.35)],
-        ])
+        ]))
         ctx.fill(spike)
       }
       // Inner glint.
@@ -2143,7 +1650,7 @@ const GameCanvas = ({
       ctx.save()
       ctx.translate(x, y)
       ctx.rotate(t * 0.8)
-      const cage = regularPolyPath(R + 5, 6, -Math.PI / 2)
+      const cage = memoPath(`cage:${R}`, () => regularPolyPath(R + 5, 6, -Math.PI / 2))
       ctx.fillStyle = 'rgba(61, 139, 255, 0.12)'
       ctx.fill(cage)
       ctx.strokeStyle = hexAlpha(PALETTE.slowRing, 0.9)
@@ -2243,7 +1750,7 @@ const GameCanvas = ({
         ctx.fill()
         if (type === 'executioner') {
           // Blade tip on the execute round.
-          const tip = polyPath([[2, -3], [7, 0], [2, 3]])
+          const tip = memoPath('execTip', () => polyPath([[2, -3], [7, 0], [2, 3]]))
           ctx.fillStyle = light
           ctx.fill(tip)
         }
@@ -2301,7 +1808,7 @@ const GameCanvas = ({
         ctx.lineTo(-3 * s, 0)
         ctx.stroke()
         ctx.rotate(t * 12 + projectile.id)
-        const shard = polyPath([[5 * s, 0], [0, -3 * s], [-5 * s, 0], [0, 3 * s]])
+        const shard = memoPath(`slowShard:${s}`, () => polyPath([[5 * s, 0], [0, -3 * s], [-5 * s, 0], [0, 3 * s]]))
         ctx.fillStyle = light
         ctx.fill(shard)
         ctx.strokeStyle = accent
@@ -2322,7 +1829,7 @@ const GameCanvas = ({
         ctx.drawImage(glowSprite(accent), -10, -10, 20, 20)
         ctx.save()
         ctx.rotate(t * 10 + projectile.id)
-        const spark = polyPath([[5, 0], [1.5, -1.5], [0, -5], [-1.5, -1.5], [-5, 0], [-1.5, 1.5], [0, 5], [1.5, 1.5]])
+        const spark = memoPath('spark', () => polyPath([[5, 0], [1.5, -1.5], [0, -5], [-1.5, -1.5], [-5, 0], [-1.5, 1.5], [0, 5], [1.5, 1.5]]))
         ctx.fillStyle = PALETTE.white
         ctx.fill(spark)
         ctx.strokeStyle = accent
@@ -2349,7 +1856,7 @@ const GameCanvas = ({
       }
       case 'barrage': {
         // Small dart — three of these fly per volley.
-        const dart = polyPath([[5, 0], [-4, -2.5], [-4, 2.5]])
+        const dart = memoPath('dart', () => polyPath([[5, 0], [-4, -2.5], [-4, 2.5]]))
         ctx.fillStyle = accent
         ctx.fill(dart)
         ctx.strokeStyle = light
@@ -2529,6 +2036,7 @@ const GameCanvas = ({
   // the previous object, so React skips the re-render and the path-block
   // check fires once per cell crossed instead of once per pixel of travel.
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    keyboardCursorRef.current = false
     const cell = cellFromEvent(e)
     setHoveredCell(prev => {
       if (prev === cell) return prev
@@ -2537,13 +2045,58 @@ const GameCanvas = ({
     })
   }
 
-  const handleMouseLeave = () => setHoveredCell(null)
+  const handleMouseLeave = () => {
+    if (!keyboardCursorRef.current) setHoveredCell(null)
+  }
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isRunOver) return
+    keyboardCursorRef.current = false
     // Use the click's own coordinates — the hover ref lags one render behind
     // and a fast move+click would act on the previous cell.
-    const hovered = cellFromEvent(e)
+    actOnCell(cellFromEvent(e))
+  }
+
+  // Keyboard play on the focused board: arrow keys move a cursor cell (the
+  // same hover state the mouse drives, so the ghost, range ring and
+  // path-block preview all follow it), Enter acts on the cell exactly like a
+  // click: select a tower there, or build the selected type.
+  const handleBoardKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    const moves: Record<string, [number, number]> = {
+      ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+    }
+    const move = moves[e.key]
+    if (move) {
+      e.preventDefault()
+      keyboardCursorRef.current = true
+      setHoveredCell(prev => {
+        const from = prev ?? { x: Math.floor(GRID_WIDTH / 2), y: Math.floor(GRID_HEIGHT / 2) }
+        return {
+          x: Math.min(GRID_WIDTH - 1, Math.max(0, from.x + move[0])),
+          y: Math.min(GRID_HEIGHT - 1, Math.max(0, from.y + move[1])),
+        }
+      })
+      return
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      actOnCell(hoveredCellRef.current)
+    }
+  }
+
+  const handleBoardFocus = () => {
+    if (!hoveredCellRef.current) {
+      keyboardCursorRef.current = true
+      setHoveredCell({ x: Math.floor(GRID_WIDTH / 2), y: Math.floor(GRID_HEIGHT / 2) })
+    }
+  }
+
+  const handleBoardBlur = () => {
+    if (keyboardCursorRef.current) setHoveredCell(null)
+    keyboardCursorRef.current = false
+  }
+
+  const actOnCell = (hovered: Position | null) => {
+    if (isRunOver) return
     const gs = liveStateRef.current
     const selType = selectedTowerTypeRef.current
     const currentTowers = gs?.towers || []
@@ -2603,10 +2156,26 @@ const GameCanvas = ({
     }
   }
 
+  hotkeyActionsRef.current = {
+    upgrade: () => {
+      if (selectedTower && !selectedTower.evolved && (selectedTower.level ?? 1) < 4) handleUpgradeSelected()
+    },
+    sell: handleSellSelected,
+    startWave: () => {
+      if (isConnected && !isWaveActive && !isRunOver) handleStartWave()
+    },
+  }
+
   const handleStartWave = () => {
-    if (countdownRef.current) clearInterval(countdownRef.current)
+    if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current)
+    countdownTimerRef.current = null
     setCountdown(null)
     onStartWave()
+    if (autoWave) {
+      // Same safety net as the countdown: a refused start re-arms Auto Wave.
+      if (rearmTimerRef.current) clearTimeout(rearmTimerRef.current)
+      rearmTimerRef.current = setTimeout(() => setAutoRearm(n => n + 1), 2000)
+    }
   }
 
   const waveStatusLabel = () => {
@@ -2625,14 +2194,18 @@ const GameCanvas = ({
   const towerButtons = TOWER_ORDER
 
   const isEvolved = selectedTower?.evolved ?? false
-  const sellPrice = selectedTower
-    ? Math.floor((selectedTower.total_spent ?? TOWER_COSTS[selectedTower.tower_type as BaseTowerType] ?? 0) * 0.7)
-    : 0
-  const upgradeCost = selectedTower && !isEvolved ? TOWER_COSTS[selectedTower.tower_type as BaseTowerType] : 0
+  // Prices come from the server on every snapshot (sell_value, upgrade_cost,
+  // evolve_cost), so the panel always shows what the server will actually
+  // charge or pay. The live tower is read from the snapshot rather than the
+  // selection copy, so a price change can't lag behind.
+  const liveSelected = selectedTower ? gameState?.towers.find(t => t.id === selectedTower.id) ?? selectedTower : null
+  const sellPrice = liveSelected?.sell_value ?? 0
+  const upgradeCost = liveSelected?.upgrade_cost ?? 0
   const canAffordUpgrade = selectedTower ? gold >= upgradeCost : false
   const isMaxLevel = selectedTower ? (selectedTower.level ?? 1) >= 4 : false
-  // Evolution: 2× everything spent so far, added to total_spent on commit.
-  const evolveCost = (selectedTower?.total_spent ?? 0) * 2
+  const evolveCost = liveSelected?.evolve_cost ?? 0
+  // What one more upgrade changes, straight from the server's preview.
+  const nextChanges = liveSelected?.next ? nextLevelChanges(liveSelected, liveSelected.next) : []
   const evolveOptions = selectedTower && !isEvolved && isMaxLevel
     ? EVOLUTION_OPTIONS[selectedTower.tower_type as BaseTowerType] ?? null
     : null
@@ -2640,9 +2213,9 @@ const GameCanvas = ({
   return (
     <div className="game-canvas-container">
       {isGameOver && !showMapSelect && (
-        <div className="game-over-overlay">
+        <Dialog className="game-over-overlay" labelledBy="game-over-title">
           <div className="game-over-box panel">
-            <div className="game-over-title">SIGNAL LOST</div>
+            <div className="game-over-title" id="game-over-title">SIGNAL LOST</div>
             <p className="game-over-sub">
               You survived {(gameState?.wave ?? 1) - 1} wave{(gameState?.wave ?? 1) - 1 !== 1 ? 's' : ''}
               {gameState?.difficulty === 'harder' && ' — HARDER'}
@@ -2663,13 +2236,13 @@ const GameCanvas = ({
               CHANGE MAP
             </button>
           </div>
-        </div>
+        </Dialog>
       )}
 
       {isVictory && !showMapSelect && (
-        <div className="victory-overlay">
+        <Dialog className="victory-overlay" labelledBy="victory-title">
           <div className="victory-box panel">
-            <div className="victory-title">ZONE SECURED</div>
+            <div className="victory-title" id="victory-title">ZONE SECURED</div>
             <p className="victory-sub">
               {GAME_MAPS.find(m => m.id === gameState?.map_id)?.name ?? 'ZONE'} held to wave{' '}
               {gameState?.wave ?? 0}{gameState?.difficulty === 'harder' && ' — HARDER'}
@@ -2687,7 +2260,7 @@ const GameCanvas = ({
               MAP SELECT
             </button>
           </div>
-        </div>
+        </Dialog>
       )}
 
       {showMapSelect && (() => {
@@ -2698,9 +2271,9 @@ const GameCanvas = ({
         const deployDifficulty: Difficulty = pendingBeaten ? pendingDifficulty : 'normal'
         const deployEndless = pendingBeaten ? pendingEndless : false
         return (
-        <div className="map-select-overlay">
+        <Dialog className="map-select-overlay" labelledBy="map-select-title" onClose={() => setShowMapSelect(false)}>
           <div className="map-select-box panel">
-            <div className="map-select-title">SELECT DEPLOYMENT ZONE</div>
+            <div className="map-select-title" id="map-select-title">SELECT DEPLOYMENT ZONE</div>
             <div className="map-select-grid">
               {GAME_MAPS_BY_SEQUENCE.map(m => {
                 const locked = m.sequenceOrder > furthestBeaten + 1
@@ -2715,7 +2288,7 @@ const GameCanvas = ({
                   >
                     <span className="map-card-seq">{String(m.sequenceOrder).padStart(2, '0')}</span>
                     <MapThumb map={m} />
-                    {locked && <span className="map-card-lock" aria-label="locked">🔒</span>}
+                    {locked && <span className="map-card-lock" role="img" aria-label="locked">🔒</span>}
                     <span className="map-card-name">
                       {m.name}
                       {!locked && gameState?.map_id === m.id && <span className="map-card-current"> ● ACTIVE</span>}
@@ -2737,12 +2310,14 @@ const GameCanvas = ({
                   <button
                     className={`btn btn-inline ${deployDifficulty === 'normal' ? 'btn-toggled' : ''}`}
                     onClick={() => setPendingDifficulty('normal')}
+                    aria-pressed={deployDifficulty === 'normal'}
                   >
                     NORMAL
                   </button>
                   <button
                     className={`btn btn-inline ${deployDifficulty === 'harder' ? 'btn-toggled' : ''}`}
                     onClick={() => setPendingDifficulty('harder')}
+                    aria-pressed={deployDifficulty === 'harder'}
                     title="−30% gold per kill, bosses ×1.5 health"
                   >
                     HARDER
@@ -2753,6 +2328,7 @@ const GameCanvas = ({
                   <button
                     className={`btn btn-inline ${!deployEndless ? 'btn-toggled' : ''}`}
                     onClick={() => setPendingEndless(false)}
+                    aria-pressed={!deployEndless}
                     title={`Win by reaching wave ${pendingMap?.winWave}`}
                   >
                     SURVIVAL
@@ -2760,6 +2336,7 @@ const GameCanvas = ({
                   <button
                     className={`btn btn-inline ${deployEndless ? 'btn-toggled' : ''}`}
                     onClick={() => setPendingEndless(true)}
+                    aria-pressed={deployEndless}
                     title="No win wave — hold out as long as you can"
                   >
                     ENDLESS
@@ -2787,10 +2364,14 @@ const GameCanvas = ({
             </div>
             <p className="map-select-warn">Deploying starts a fresh run on the selected map.</p>
           </div>
-        </div>
+        </Dialog>
         )
       })()}
 
+      <p className="sr-only" role="status" aria-live="polite">
+        {isVictory ? 'Zone secured.' : isGameOver ? 'Signal lost. Game over.'
+          : isWaveActive ? `Wave ${gameState?.wave ?? 1} in progress.` : `Wave ${gameState?.wave ?? 1} ready.`}
+      </p>
       <div className="game-info panel">
         <div className="info-item"><span className="label">Gold</span><span className="value gold">${gold}</span></div>
         <div className="info-item"><span className="label">Health</span><span className={`value ${(gameState?.health ?? 100) <= 30 ? 'health-low' : ''}`}>{gameState?.health ?? 100}</span></div>
@@ -2880,9 +2461,9 @@ const GameCanvas = ({
                 {selectedTower.tower_type !== 'laser' && (
                   <div className="selected-stat"><span className="label">Rate</span><span className="value">{selectedTower.fire_rate}/s</span></div>
                 )}
-                {(selectedTower.chain_count ?? 0) > 0 && (
-                  <div className="selected-stat"><span className="label">Chains</span><span className="value">×{selectedTower.chain_count}</span></div>
-                )}
+                {specialStats(liveSelected ?? selectedTower).map(line => (
+                  <div key={line.label} className="selected-stat"><span className="label">{line.label}</span><span className="value">{line.value}</span></div>
+                ))}
               </>
             )}
             <button onClick={handleSellSelected} className="btn btn-danger">SELL ${sellPrice}</button>
@@ -2891,13 +2472,21 @@ const GameCanvas = ({
                 onClick={handleUpgradeSelected}
                 disabled={!canAffordUpgrade}
                 className="btn btn-gold"
-                title={canAffordUpgrade ? `Upgrade to MK${(selectedTower.level ?? 1) + 1}` : `Need $${upgradeCost} to upgrade`}
+                title={canAffordUpgrade ? `Upgrade to MK${(selectedTower.level ?? 1) + 1}` : `Need ${upgradeCost} to upgrade`}
+                aria-describedby={nextChanges.length ? 'selected-next' : undefined}
               >
                 UPGRADE ${upgradeCost}
               </button>
             )}
-            <button onClick={() => setSelectedTower(null)} className="btn btn-close">✕</button>
+            <button onClick={() => setSelectedTower(null)} className="btn btn-close" aria-label="Close tower panel" title="Close (Esc)">✕</button>
           </div>
+
+          {nextChanges.length > 0 && (
+            <div className="selected-next" id="selected-next">
+              <span className="selected-next-label">NEXT · MK{liveSelected?.next?.level}</span>
+              {nextChanges.map(change => <span key={change} className="selected-next-item">{change}</span>)}
+            </div>
+          )}
 
           {evolveOptions && !evolveChoice && (
             <div className="evolve-row">
@@ -2956,6 +2545,12 @@ const GameCanvas = ({
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
           onClick={handleClick}
+          tabIndex={0}
+          onKeyDown={handleBoardKeyDown}
+          onFocus={handleBoardFocus}
+          onBlur={handleBoardBlur}
+          role="application"
+          aria-label="Game board. Arrow keys move the cursor, Enter builds or selects. 1 to 5 pick a tower, U upgrades, S sells, Space starts the wave."
           style={{ cursor: isRunOver ? 'default' : 'crosshair', display: 'block' }}
         />
       </div>
@@ -2971,15 +2566,8 @@ const GameCanvas = ({
         </button>
         <button
           className={`btn ${autoWave ? 'btn-toggled' : ''}`}
-          onClick={() => {
-            setAutoWave(prev => {
-              if (prev) {
-                if (countdownRef.current) clearInterval(countdownRef.current)
-                setCountdown(null)
-              }
-              return !prev
-            })
-          }}
+          onClick={() => setAutoWave(prev => !prev)}
+          aria-pressed={autoWave}
           disabled={isRunOver}
           title="Automatically start next wave after 5 seconds"
         >

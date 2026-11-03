@@ -46,6 +46,27 @@ export interface Tower {
   chain_radius?: number
   evolved?: boolean
   multi_shot?: number
+  // Prices from the server (snapshots only): what selling pays, what the
+  // next upgrade costs (absent at max level or once evolved), and what
+  // evolving costs (present only when the tower can evolve).
+  sell_value?: number
+  upgrade_cost?: number
+  evolve_cost?: number
+  // Stats after one more upgrade (absent at max level or once evolved).
+  next?: TowerPreview
+}
+
+// A tower's stats at its next level, as the server will set them.
+export interface TowerPreview {
+  level: number
+  range: number
+  damage: number
+  slow_duration_upgrade?: number
+  slow_multiplier_upgrade?: number
+  aoe_radius_upgrade?: number
+  aoe_damage_pct_upgrade?: number
+  chain_count?: number
+  chain_radius?: number
 }
 
 export interface Enemy {

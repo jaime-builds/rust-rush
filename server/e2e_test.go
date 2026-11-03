@@ -201,3 +201,118 @@ func TestEndToEndGameFlow(t *testing.T) {
 			s.Phase == "waiting" && len(s.Towers) == 0 && len(s.Enemies) == 0 && !s.FastForward
 	})
 }
+
+// e2eServer boots manager + hub + ServeWs behind httptest and returns the
+// ws:// URL.
+func e2eServer(t *testing.T) (*game.Manager, string) {
+	t.Helper()
+	gameManager := game.NewManager()
+	hub := rrws.NewHub(gameManager)
+	go hub.Run()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rrws.ServeWs(hub, w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return gameManager, "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+}
+
+func dial(t *testing.T, url string) *websocket.Conn {
+	t.Helper()
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
+// joinE2E joins (optionally resuming) and returns the server-issued code.
+func joinE2E(t *testing.T, conn *websocket.Conn, resume string) string {
+	t.Helper()
+	msg := map[string]interface{}{"type": "join_room", "room_id": "game-1"}
+	if resume != "" {
+		msg["payload"] = map[string]interface{}{"resume": resume}
+	}
+	send(t, conn, msg)
+	join := waitFor(t, conn, "join ack", 5*time.Second, func(m e2eMsg) bool { return m.Type == "join_room" })
+	var full struct {
+		Payload struct {
+			RoomCode string `json:"room_code"`
+		} `json:"payload"`
+	}
+	json.Unmarshal(join.raw, &full)
+	if full.Payload.RoomCode == "" {
+		t.Fatalf("join reply has no room_code: %s", join.raw)
+	}
+	return full.Payload.RoomCode
+}
+
+// Two visitors who both send the old shared room_id get separate games:
+// a tower placed by one never shows up in the other's state stream.
+func TestEndToEndRoomsAreIsolated(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test skipped in -short mode")
+	}
+	_, url := e2eServer(t)
+	a, b := dial(t, url), dial(t, url)
+	codeA, codeB := joinE2E(t, a, ""), joinE2E(t, b, "")
+	if codeA == codeB {
+		t.Fatal("both visitors got the same room")
+	}
+
+	send(t, a, map[string]interface{}{"type": "place_tower", "room_id": codeB,
+		"payload": map[string]interface{}{"x": 10.0, "y": 7.0, "tower_type": "basic"}})
+	waitFor(t, a, "a's tower in a's state", 5*time.Second, func(m e2eMsg) bool {
+		return m.Type == "game_state" && m.Payload.State != nil && len(m.Payload.State.Towers) == 1
+	})
+
+	// Read b's stream for a while: every frame must show an empty board.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	frames := 0
+	for time.Now().Before(deadline) {
+		b.SetReadDeadline(deadline)
+		_, raw, err := b.ReadMessage()
+		if err != nil {
+			break
+		}
+		var m e2eMsg
+		json.Unmarshal(raw, &m)
+		if m.Type == "game_state" && m.Payload.State != nil {
+			frames++
+			if len(m.Payload.State.Towers) != 0 {
+				t.Fatal("visitor b sees visitor a's tower")
+			}
+		}
+	}
+	if frames == 0 {
+		t.Error("visitor b received no state frames")
+	}
+}
+
+// RR-04 (server side): a dropped connection resumes its game with the code,
+// inside the grace period.
+func TestEndToEndReconnectResumes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test skipped in -short mode")
+	}
+	manager, url := e2eServer(t)
+	first := dial(t, url)
+	code := joinE2E(t, first, "")
+	send(t, first, map[string]interface{}{"type": "place_tower",
+		"payload": map[string]interface{}{"x": 10.0, "y": 7.0, "tower_type": "basic"}})
+	waitFor(t, first, "tower placed", 5*time.Second, func(m e2eMsg) bool {
+		return m.Type == "place_tower" && m.Payload.Status == "placed"
+	})
+	first.Close() // network drop / page refresh
+
+	second := dial(t, url)
+	if got := joinE2E(t, second, code); got != code {
+		t.Fatalf("reconnect landed in %s, want %s", got, code)
+	}
+	waitFor(t, second, "resumed state with the tower", 5*time.Second, func(m e2eMsg) bool {
+		return m.Type == "game_state" && m.Payload.State != nil && len(m.Payload.State.Towers) == 1
+	})
+	if n := manager.RoomCount(); n != 1 {
+		t.Errorf("RoomCount = %d after resume, want 1", n)
+	}
+}

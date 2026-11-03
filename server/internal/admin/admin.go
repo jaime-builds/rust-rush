@@ -14,9 +14,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"rust-rush/server/internal/netutil"
 )
 
 const (
@@ -28,6 +31,10 @@ const (
 	sessionTTL = 12 * time.Hour
 	// maxLoginBody caps the request body — the payload is two short strings.
 	maxLoginBody = 4 << 10
+	// maxFailures failed logins per IP inside failureWindow lock that IP out
+	// until the oldest failure ages past the window.
+	maxFailures   = 10
+	failureWindow = 15 * time.Minute
 )
 
 // Auth holds the configured credentials and the live session tokens.
@@ -37,7 +44,9 @@ type Auth struct {
 	password string
 
 	mu       sync.Mutex
-	sessions map[string]time.Time // token -> expiry
+	sessions map[string]time.Time   // token -> expiry
+	failures map[string][]time.Time // visitor IP -> recent failed logins
+	now      func() time.Time       // clock; tests move it
 }
 
 // New reads the credentials from the environment. There are no defaults: if
@@ -49,7 +58,30 @@ func New() *Auth {
 		username: os.Getenv("ADMIN_USERNAME"),
 		password: os.Getenv("ADMIN_PASSWORD"),
 		sessions: make(map[string]time.Time),
+		failures: make(map[string][]time.Time),
+		now:      time.Now,
 	}
+}
+
+// recentFailuresLocked prunes failures older than the window (for every IP,
+// so the map can't grow without bound) and returns ip's remaining count.
+// Caller holds a.mu.
+func (a *Auth) recentFailuresLocked(ip string) int {
+	cutoff := a.clock().Add(-failureWindow)
+	for key, times := range a.failures {
+		kept := times[:0]
+		for _, t := range times {
+			if t.After(cutoff) {
+				kept = append(kept, t)
+			}
+		}
+		if len(kept) == 0 {
+			delete(a.failures, key)
+		} else {
+			a.failures[key] = kept
+		}
+	}
+	return len(a.failures[ip])
 }
 
 // Configured reports whether both credential env vars are set.
@@ -66,16 +98,42 @@ type loginRequest struct {
 // Login validates credentials and, on success, sets the session cookie.
 // Responds 401 on any credential mismatch — the body never distinguishes a
 // wrong username from a wrong password.
+//
+// Ten failed attempts from one IP within 15 minutes lock that IP out with
+// 429 until the window rolls on, checked before the credentials are even
+// compared. Failures are logged with the IP and count, never the submitted
+// values.
 func (a *Auth) Login(w http.ResponseWriter, r *http.Request) {
+	ip := netutil.ClientIP(r)
+	a.mu.Lock()
+	locked := a.recentFailuresLocked(ip) >= maxFailures
+	a.mu.Unlock()
+	if locked {
+		w.Header().Set("Retry-After", strconv.Itoa(int(failureWindow.Seconds())))
+		http.Error(w, "too many attempts", http.StatusTooManyRequests)
+		return
+	}
+
 	var req loginRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxLoginBody)).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if !a.credentialsMatch(req.Username, req.Password) {
+		a.mu.Lock()
+		if a.failures == nil {
+			a.failures = make(map[string][]time.Time)
+		}
+		a.failures[ip] = append(a.failures[ip], a.clock())
+		n := len(a.failures[ip])
+		a.mu.Unlock()
+		log.Printf("admin: failed login from %s (%d in the last %s)", ip, n, failureWindow)
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
+	a.mu.Lock()
+	delete(a.failures, ip)
+	a.mu.Unlock()
 
 	token, err := newToken()
 	if err != nil {
@@ -192,4 +250,12 @@ func isSecure(r *http.Request) bool {
 		return true
 	}
 	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// clock returns the configured time source (tests swap it), or time.Now.
+func (a *Auth) clock() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
 }

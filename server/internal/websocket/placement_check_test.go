@@ -95,19 +95,30 @@ func TestCheckPlacementIgnoresBadRequests(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		roomID  string
 		payload map[string]interface{}
 	}{
-		{"non-numeric x", "check-room-2", map[string]interface{}{"x": "five", "y": 5.0}},
-		{"missing y", "check-room-2", map[string]interface{}{"x": 5.0}},
-		{"unknown room", "no-such-room", map[string]interface{}{"x": 5.0, "y": 5.0}},
+		{"non-numeric x", map[string]interface{}{"x": "five", "y": 5.0}},
+		{"missing y", map[string]interface{}{"x": 5.0}},
 	}
 	for _, tc := range cases {
-		c.handleMessage(&Message{Type: MessageTypeCheckPlacement, RoomID: tc.roomID, Payload: tc.payload})
+		c.handleMessage(&Message{Type: MessageTypeCheckPlacement, Payload: tc.payload})
 		select {
 		case raw := <-c.send:
 			t.Errorf("%s was answered: %s", tc.name, raw)
 		default:
 		}
+	}
+
+	// A client whose room no longer exists (closed after the idle grace
+	// period) gets no answer either. Rooms are assigned by the server, so
+	// "unknown room" can only arise this way now; a client-sent room_id is
+	// ignored (see TestClientRoomIDIsIgnored).
+	gone := &Client{hub: c.hub, id: "orphan", roomID: "closed-room", send: make(chan []byte, 4)}
+	gone.handleMessage(&Message{Type: MessageTypeCheckPlacement,
+		Payload: map[string]interface{}{"x": 5.0, "y": 5.0}})
+	select {
+	case raw := <-gone.send:
+		t.Errorf("client in a closed room was answered: %s", raw)
+	default:
 	}
 }

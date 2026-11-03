@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"rust-rush/server/internal/game"
+	"rust-rush/server/internal/netutil"
 
 	"github.com/gorilla/websocket"
 )
@@ -21,44 +22,82 @@ const (
 	pongWait       = 60 * time.Second
 	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 512 * 1024
+
+	// sendBuffer is each client's outgoing queue. State frames may fill only
+	// half of it; the other half stays free for replies (placement answers,
+	// rejections), so a slow connection loses old frames before it loses
+	// an answer to a click.
+	sendBuffer = 64
+	// stuckFrames: a client that has refused this many state frames in a row
+	// (about 10 s at 60 Hz) isn't reading; drop the connection.
+	stuckFrames = 600
+
+	// Per-connection message limits (sustained rate = burst). Hover checks
+	// fire once per grid cell the cursor crosses, so they get their own,
+	// larger allowance.
+	messagesPerSecond = 30
+	checksPerSecond   = 60
 )
 
-// allowedOrigins comes from the ALLOWED_ORIGINS env var (comma-separated,
-// e.g. "https://rust-rush.jaime.build"). Empty (the dev default) allows all
-// origins; in production the client is served same-origin by this server, so
-// a single entry matching the public URL is enough.
-var allowedOrigins = func() map[string]bool {
+// debugSpawnEnabled gates the spawn_enemy debug message. Off unless the
+// server runs with DEBUG_SPAWN=1, so production players can't flood rooms or
+// farm scores with free enemies. The join reply tells the client whether to
+// show the DEBUG panel at all.
+var debugSpawnEnabled = os.Getenv("DEBUG_SPAWN") == "1"
+
+// parseOrigins reads ALLOWED_ORIGINS (comma-separated, e.g.
+// "https://rust-rush.jaime.build").
+func parseOrigins(raw string) map[string]bool {
 	origins := make(map[string]bool)
-	for _, o := range strings.Split(os.Getenv("ALLOWED_ORIGINS"), ",") {
+	for _, o := range strings.Split(raw, ",") {
 		if o = strings.TrimSpace(o); o != "" {
 			origins[o] = true
 		}
 	}
 	return origins
-}()
+}
+
+var allowedOrigins = parseOrigins(os.Getenv("ALLOWED_ORIGINS"))
+
+// originAllowed is the cross-site WebSocket guard. An empty allowlist (the
+// dev default) allows all origins; in production the client is served
+// same-origin, so one entry matching the public URL is enough. A missing
+// Origin header is a non-browser client (curl, tests): browsers always send
+// it on WebSocket handshakes, so it can't be used to ride a visitor's page.
+func originAllowed(allowed map[string]bool, origin string) bool {
+	if len(allowed) == 0 || origin == "" {
+		return true
+	}
+	return allowed[origin]
+}
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		if len(allowedOrigins) == 0 {
-			return true // no ALLOWED_ORIGINS configured — dev mode, allow all
-		}
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true // non-browser client (curl, tests)
-		}
-		return allowedOrigins[origin]
+		return originAllowed(allowedOrigins, r.Header.Get("Origin"))
 	},
 }
 
 // Client represents a WebSocket client
 type Client struct {
-	hub    *Hub
-	conn   *websocket.Conn
-	send   chan []byte
-	id     string
+	hub  *Hub
+	conn *websocket.Conn
+	send chan []byte
+	id   string
+	// roomID is the room the server assigned; guarded by hub.mu (use
+	// hub.roomOf to read it from handlers).
 	roomID string
+	// ip and reserved: the connection slot taken in hub.reserve, released
+	// on unregister.
+	ip       string
+	reserved bool
+	// dropped counts consecutive state frames refused for a full buffer.
+	dropped atomic.Int32
+	// Rate limit state, touched only by readPump.
+	msgBucket   *netutil.TokenBucket
+	checkBucket *netutil.TokenBucket
+	limited     int
 }
 
 // readPump pumps messages from the WebSocket connection to the hub
@@ -84,86 +123,83 @@ func (c *Client) readPump() {
 			break
 		}
 
-		// Parse the message
 		var msg Message
 		if err := json.Unmarshal(messageBytes, &msg); err != nil {
 			log.Printf("Failed to parse message: %v", err)
 			continue
 		}
 
-		// Handle the message
+		if !c.allow(msg.Type, time.Now()) {
+			continue
+		}
 		c.handleMessage(&msg)
 	}
 }
 
-// handleMessage processes different message types
+// allow applies the per-connection rate limit. Over-limit messages are
+// dropped, not queued; one log line per 100 drops keeps a flood visible
+// without letting it fill the log.
+func (c *Client) allow(msgType string, now time.Time) bool {
+	if c.msgBucket == nil {
+		c.msgBucket = netutil.NewTokenBucket(messagesPerSecond, messagesPerSecond)
+		c.checkBucket = netutil.NewTokenBucket(checksPerSecond, checksPerSecond)
+	}
+	bucket := c.msgBucket
+	if msgType == MessageTypeCheckPlacement {
+		bucket = c.checkBucket
+	}
+	if bucket.Allow(now) {
+		return true
+	}
+	if c.limited%100 == 0 {
+		log.Printf("Client %s over the message rate limit (%d dropped)", c.id, c.limited+1)
+	}
+	c.limited++
+	return false
+}
+
+// currentRoom returns the client's server-assigned room. Every action
+// handler goes through here, so a client can only ever touch its own room.
+func (c *Client) currentRoom() (string, *game.GameStateWithShooting, bool) {
+	roomID := c.hub.roomOf(c)
+	if roomID == "" {
+		return "", nil, false
+	}
+	room, ok := c.hub.gameManager.GetShootingRoom(roomID)
+	return roomID, room, ok
+}
+
+// reply sends a typed reply with the given payload to this client only.
+func (c *Client) reply(msgType string, payload map[string]interface{}) {
+	c.sendJSON(Message{Type: msgType, Payload: payload})
+}
+
+// handleMessage processes different message types. Successful actions are
+// logged; the message itself isn't (check_placement alone fires once per
+// hovered cell).
 func (c *Client) handleMessage(msg *Message) {
-	log.Printf("Client %s received message type: %s", c.id, msg.Type)
+	if msg.Type == MessageTypeJoinRoom {
+		c.handleJoin(msg)
+		return
+	}
+	if msg.Type == MessageTypeLeaveRoom {
+		if prev := c.hub.setClientRoom(c, ""); prev != "" {
+			c.hub.gameManager.RemovePlayer(prev, c.id)
+		}
+		return
+	}
+
+	roomID, room, ok := c.currentRoom()
+	if !ok {
+		return // not in a room (or it was closed): nothing to act on
+	}
 
 	switch msg.Type {
-	case MessageTypeJoinRoom:
-		if msg.RoomID != "" {
-			c.hub.setClientRoom(c, msg.RoomID)
-
-			// Check-and-create is atomic so two clients joining at once can't
-			// create duplicate rooms (each with its own 60 FPS game loop).
-			room, created := c.hub.gameManager.GetOrCreateShootingRoom(msg.RoomID)
-			if created {
-				room.SetSpawnGoal(game.Position{X: 0, Y: 7}, game.Position{X: 19, Y: 7})
-				go c.hub.gameManager.StartGameLoop(msg.RoomID)
-				log.Printf("Created new shooting room: %s", msg.RoomID)
-			}
-
-			c.hub.gameManager.AddPlayer(msg.RoomID, c.id)
-
-			// Send confirmation with current game state
-			snapshot := room.GetSnapshot()
-
-			response := Message{
-				Type:   MessageTypeJoinRoom,
-				RoomID: msg.RoomID,
-				Payload: map[string]interface{}{
-					"status":   "joined",
-					"clientId": c.id,
-					"state":    snapshot,
-				},
-			}
-			c.sendJSON(response)
-
-			log.Printf("Client %s joined shooting room %s", c.id, msg.RoomID)
-		}
-
-	case MessageTypeLeaveRoom:
-		if c.roomID != "" {
-			c.hub.gameManager.RemovePlayer(c.roomID, c.id)
-			c.hub.setClientRoom(c, "")
-		}
-
 	case MessageTypePlaceTower:
-		// Use room_id from message if provided, otherwise use client's stored roomID
-		roomID := msg.RoomID
-		if roomID == "" {
-			roomID = c.roomID
-		}
-
-		if roomID == "" {
-			log.Printf("Client %s tried to place tower but is not in a room", c.id)
-			return
-		}
-
-		// Extract tower placement data
 		x, xOk := msg.Payload["x"].(float64)
 		y, yOk := msg.Payload["y"].(float64)
 		towerType, typeOk := msg.Payload["tower_type"].(string)
-
 		if !xOk || !yOk || !typeOk {
-			log.Printf("Invalid tower placement data: %v", msg.Payload)
-			return
-		}
-
-		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
-		if !exists {
-			log.Printf("Room %s does not exist", roomID)
 			return
 		}
 
@@ -176,146 +212,53 @@ func (c *Client) handleMessage(msg *Message) {
 			} else if errors.Is(err, game.ErrPathBlocked) {
 				status = "path_blocked"
 			}
-			log.Printf("Client %s tower placement rejected (%s at %.0f,%.0f): %v", c.id, towerType, x, y, err)
-			response := Message{
-				Type: MessageTypePlaceTower,
-				Payload: map[string]interface{}{
-					"status": status,
-				},
-			}
-			c.sendJSON(response)
+			c.reply(MessageTypePlaceTower, map[string]interface{}{"status": status})
 			return
 		}
-
-		log.Printf("Placed %s tower at (%.1f, %.1f) in room %s", towerType, x, y, roomID)
-
-		// Broadcast updated state immediately
 		c.hub.BroadcastGameState(roomID)
-
-		// Send acknowledgment
-		response := Message{
-			Type: MessageTypePlaceTower,
-			Payload: map[string]interface{}{
-				"status": "placed",
-				"tower":  tower,
-			},
-		}
-		c.sendJSON(response)
+		c.reply(MessageTypePlaceTower, map[string]interface{}{"status": "placed", "tower": tower})
 
 	case MessageTypeCheckPlacement:
-		roomID := msg.RoomID
-		if roomID == "" {
-			roomID = c.roomID
-		}
-		if roomID == "" {
-			return
-		}
-		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
-		if !exists {
-			return
-		}
 		x, xOk := msg.Payload["x"].(float64)
 		y, yOk := msg.Payload["y"].(float64)
 		if !xOk || !yOk {
-			log.Printf("Invalid check_placement data: %v", msg.Payload)
 			return
 		}
 		// Echo x/y back: these fly one per hovered cell, so a reply can
 		// land after the cursor has moved on and the client needs to know
-		// which cell it describes. Success is deliberately not logged — one
-		// line per cell crossed would drown the log.
-		c.sendJSON(Message{
-			Type: MessageTypeCheckPlacement,
-			Payload: map[string]interface{}{
-				"x":           x,
-				"y":           y,
-				"blocks_path": room.WouldBlockPath(x, y),
-			},
+		// which cell it describes.
+		c.reply(MessageTypeCheckPlacement, map[string]interface{}{
+			"x":           x,
+			"y":           y,
+			"blocks_path": room.WouldBlockPath(x, y),
 		})
 
 	case MessageTypeRemoveTower:
-		roomID := msg.RoomID
-		if roomID == "" {
-			roomID = c.roomID
-		}
-		if roomID == "" {
-			return
-		}
-		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
-		if !exists {
-			return
-		}
 		towerID, ok := msg.Payload["tower_id"].(float64)
 		if !ok {
-			log.Printf("Invalid tower_id in remove_tower: %v", msg.Payload)
 			return
 		}
-		refund, removed := room.RemoveTower(int(towerID))
-		if removed {
-			log.Printf("Sold tower %d for $%d in room %s", int(towerID), refund, roomID)
+		if refund, removed := room.RemoveTower(int(towerID)); removed {
 			c.hub.BroadcastGameState(roomID)
-			c.sendJSON(Message{
-				Type: MessageTypeRemoveTower,
-				Payload: map[string]interface{}{
-					"status": "sold",
-					"refund": refund,
-				},
-			})
+			c.reply(MessageTypeRemoveTower, map[string]interface{}{"status": "sold", "refund": refund})
 		}
 
 	case MessageTypeUpgradeTower:
-		roomID := msg.RoomID
-		if roomID == "" {
-			roomID = c.roomID
-		}
-		if roomID == "" {
-			return
-		}
-		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
-		if !exists {
-			return
-		}
 		towerID, ok := msg.Payload["tower_id"].(float64)
 		if !ok {
-			log.Printf("Invalid tower_id in upgrade_tower: %v", msg.Payload)
 			return
 		}
-		tower, upgraded := room.UpgradeTower(int(towerID))
-		if upgraded {
-			log.Printf("Upgraded tower %d to level %d in room %s", int(towerID), tower.Level, roomID)
+		if tower, upgraded := room.UpgradeTower(int(towerID)); upgraded {
 			c.hub.BroadcastGameState(roomID)
-			c.sendJSON(Message{
-				Type: MessageTypeUpgradeTower,
-				Payload: map[string]interface{}{
-					"status": "upgraded",
-					"tower":  tower,
-				},
-			})
+			c.reply(MessageTypeUpgradeTower, map[string]interface{}{"status": "upgraded", "tower": tower})
 		} else {
-			c.sendJSON(Message{
-				Type: MessageTypeUpgradeTower,
-				Payload: map[string]interface{}{
-					"status": "failed",
-				},
-			})
+			c.reply(MessageTypeUpgradeTower, map[string]interface{}{"status": "failed"})
 		}
 
 	case MessageTypeEvolveTower:
-		roomID := msg.RoomID
-		if roomID == "" {
-			roomID = c.roomID
-		}
-		if roomID == "" {
-			return
-		}
-		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
-		if !exists {
-			return
-		}
 		towerID, idOk := msg.Payload["tower_id"].(float64)
 		evolution, evoOk := msg.Payload["evolution"].(string)
 		if !idOk || !evoOk {
-			log.Printf("Invalid evolve_tower payload: %v", msg.Payload)
 			return
 		}
 		tower, err := room.EvolveTower(int(towerID), evolution)
@@ -331,207 +274,125 @@ func (c *Client) handleMessage(msg *Message) {
 			case errors.Is(err, game.ErrInvalidEvolution):
 				status = "invalid_evolution"
 			}
-			log.Printf("Client %s evolution rejected (tower %d → %s): %v", c.id, int(towerID), evolution, err)
-			c.sendJSON(Message{
-				Type: MessageTypeEvolveTower,
-				Payload: map[string]interface{}{
-					"status": status,
-				},
-			})
+			c.reply(MessageTypeEvolveTower, map[string]interface{}{"status": status})
 			return
 		}
-		log.Printf("⚡ Evolved tower %d into %s in room %s", int(towerID), evolution, roomID)
 		c.hub.BroadcastGameState(roomID)
-		c.sendJSON(Message{
-			Type: MessageTypeEvolveTower,
-			Payload: map[string]interface{}{
-				"status": "evolved",
-				"tower":  tower,
-			},
-		})
+		c.reply(MessageTypeEvolveTower, map[string]interface{}{"status": "evolved", "tower": tower})
 
 	case MessageTypeSpawnEnemy:
-		// Use room_id from message if provided, otherwise use client's stored roomID
-		roomID := msg.RoomID
-		if roomID == "" {
-			roomID = c.roomID
-		}
-
-		if roomID == "" {
-			log.Printf("Client %s tried to spawn enemy but is not in a room", c.id)
+		if !debugSpawnEnabled {
 			return
 		}
-
-		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
-		if !exists {
-			log.Printf("Room %s does not exist", roomID)
-			return
-		}
-
-		// Extract enemy type
 		enemyType := "basic"
 		if et, ok := msg.Payload["enemy_type"].(string); ok {
 			enemyType = et
 		}
-
-		// The server computes the path itself, exactly like wave spawns —
-		// client-supplied paths were trusted verbatim (and the old no-path
-		// fallback was a straight spawn→goal line through the maze).
+		// The server computes the path itself, exactly like wave spawns.
 		path := room.FindPathFromSpawn()
 		if path == nil {
-			log.Printf("Debug spawn skipped in room %s — path blocked", roomID)
 			return
 		}
-
 		enemy := room.AddEnemy(enemyType, path, 1) // wave 1 = unscaled stats for debug spawns
-		log.Printf("Spawned %s enemy with ID %d in room %s", enemyType, enemy.ID, roomID)
-
-		// Broadcast updated state
 		c.hub.BroadcastGameState(roomID)
-
-		// Send acknowledgment
-		response := Message{
-			Type: MessageTypeSpawnEnemy,
-			Payload: map[string]interface{}{
-				"status": "spawned",
-				"enemy":  enemy,
-			},
-		}
-		c.sendJSON(response)
+		c.reply(MessageTypeSpawnEnemy, map[string]interface{}{"status": "spawned", "enemy": enemy})
 
 	case MessageTypeSetSpeed:
-		roomID := msg.RoomID
-		if roomID == "" {
-			roomID = c.roomID
-		}
-		if roomID == "" {
-			return
-		}
-		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
-		if !exists {
-			return
-		}
 		// New form: {"speed": 1|2|3}. The legacy {"fast_forward": bool} form
 		// (the old binary FF toggle) still works as 1x/3x.
 		if speed, ok := msg.Payload["speed"].(float64); ok {
 			if room.SetSpeedMultiplier(speed) {
-				log.Printf("⏩ Speed set to %.0fx in room %s", speed, roomID)
 				c.hub.BroadcastGameState(roomID)
-			} else {
-				log.Printf("Invalid speed %v from client %s — ignored", speed, c.id)
 			}
 			return
 		}
 		ff, _ := msg.Payload["fast_forward"].(bool)
 		room.SetFastForward(ff)
-		log.Printf("⏩ Fast forward: %v in room %s", ff, roomID)
 
 	case MessageTypeStartWave:
-		roomID := msg.RoomID
-		if roomID == "" {
-			roomID = c.roomID
-		}
-
-		if roomID == "" {
-			log.Printf("Client %s tried to start wave but is not in a room", c.id)
-			return
-		}
-
-		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
-		if !exists {
-			return
-		}
-
-		// Only allow starting a wave in waiting phase
 		if room.GetPhase() != game.PhaseWaiting {
-			log.Printf("Client %s tried to start wave but game is not in waiting phase", c.id)
+			c.reply(MessageTypeStartWave, map[string]interface{}{"status": "rejected"})
 			return
 		}
-
-		log.Printf("🌊 Client %s starting wave in room %s", c.id, roomID)
 		go c.hub.gameManager.SpawnWave(roomID)
 
 	case MessageTypeNewGame:
-		roomID := msg.RoomID
-		if roomID == "" {
-			roomID = c.roomID
-		}
-
-		if roomID == "" {
-			return
-		}
-
-		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
-		if !exists {
-			return
-		}
-
 		// Optional fields: map_id selects the map (unknown/missing keeps the
 		// room's current map), difficulty ("normal"|"harder") and endless
-		// configure the run — both default to normal/false when absent, so
-		// pre-progression clients keep exactly the old behavior.
+		// configure the run — both default to normal/false when absent.
 		difficulty, _ := msg.Payload["difficulty"].(string)
 		endless, _ := msg.Payload["endless"].(bool)
-		if mapID, ok := msg.Payload["map_id"].(string); ok && mapID != "" {
-			if !room.ResetToMapWithOptions(mapID, difficulty, endless) {
-				log.Printf("⚠️ Unknown map_id %q from client %s — kept current map", mapID, c.id)
-			} else {
-				log.Printf("🗺️ Room %s switched to map %s", roomID, mapID)
-			}
-		} else {
-			room.ResetToMapWithOptions("", difficulty, endless)
+		mapID, _ := msg.Payload["map_id"].(string)
+		if !room.ResetToMapWithOptions(mapID, difficulty, endless) && mapID != "" {
+			log.Printf("Unknown map_id %q from client %s — kept current map", mapID, c.id)
 		}
-		log.Printf("🔄 New game started in room %s (difficulty=%s endless=%v)", roomID, room.GetSnapshot().Difficulty, endless)
 		c.hub.BroadcastGameState(roomID)
 
 	case MessageTypeContinueEndless:
-		roomID := msg.RoomID
-		if roomID == "" {
-			roomID = c.roomID
-		}
-		if roomID == "" {
-			return
-		}
-		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
-		if !exists {
-			return
-		}
 		if room.ContinueEndless() {
-			log.Printf("♾️ Room %s continuing past the win wave in Endless", roomID)
 			c.hub.BroadcastGameState(roomID)
-		} else {
-			log.Printf("Client %s sent continue_endless outside the victory phase — ignored", c.id)
 		}
 
 	case MessageTypePauseGame:
-		roomID := msg.RoomID
-		if roomID == "" {
-			roomID = c.roomID
-		}
-		if roomID == "" {
-			return
-		}
-		room, exists := c.hub.gameManager.GetShootingRoom(roomID)
-		if !exists {
-			return
-		}
 		paused, _ := msg.Payload["paused"].(bool)
 		room.SetPaused(paused)
-		if paused {
-			log.Printf("⏸ Game paused in room %s by client %s", roomID, c.id)
-		} else {
-			log.Printf("▶ Game resumed in room %s by client %s", roomID, c.id)
-		}
-		// Broadcast immediately so every client's pause button flips at once
-		// (the 60 Hz loop would also carry it, but this removes the lag).
+		// Broadcast immediately so the pause button flips at once (the
+		// 60 Hz loop would also carry it, but this removes the lag).
 		c.hub.BroadcastGameState(roomID)
 
 	default:
-		log.Printf("Unknown message type: %s", msg.Type)
+		log.Printf("Unknown message type from client %s: %q", c.id, msg.Type)
 	}
 }
 
-// sendJSON sends a JSON message to the client
+// handleJoin puts the client in a room. Rooms are private and server-made:
+// a client can't name a room, only resume one with the code the server gave
+// it at its last join (kept by that browser tab). An unknown or expired code
+// silently gets a fresh room.
+func (c *Client) handleJoin(msg *Message) {
+	manager := c.hub.gameManager
+
+	var room *game.GameStateWithShooting
+	if code, _ := msg.Payload["resume"].(string); code != "" {
+		room, _ = manager.GetShootingRoom(code)
+	}
+	if room == nil {
+		// Already in a room (a repeat join from the same connection): stay.
+		if _, current, ok := c.currentRoom(); ok {
+			room = current
+		}
+	}
+	if room == nil {
+		created, err := manager.CreateRoom()
+		if err != nil {
+			log.Printf("Client %s refused a room: %v", c.id, err)
+			c.reply(MessageTypeJoinRoom, map[string]interface{}{"status": "server_full"})
+			return
+		}
+		room = created
+	}
+
+	roomID := room.RoomID
+	if prev := c.hub.setClientRoom(c, roomID); prev != "" && prev != roomID {
+		manager.RemovePlayer(prev, c.id)
+	}
+	manager.AddPlayer(roomID, c.id)
+
+	c.sendJSON(Message{
+		Type:   MessageTypeJoinRoom,
+		RoomID: roomID,
+		Payload: map[string]interface{}{
+			"status":      "joined",
+			"clientId":    c.id,
+			"room_code":   roomID,
+			"debug_spawn": debugSpawnEnabled,
+			"state":       room.GetSnapshot(),
+		},
+	})
+}
+
+// sendJSON sends a reply to this client. Replies may use the whole buffer;
+// state frames only half (see offerFrame).
 func (c *Client) sendJSON(msg Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -542,7 +403,28 @@ func (c *Client) sendJSON(msg Message) {
 	select {
 	case c.send <- data:
 	default:
-		log.Printf("Client %s send buffer full", c.id)
+		log.Printf("Client %s send buffer full, reply dropped", c.id)
+	}
+}
+
+// offerFrame queues a state frame unless the buffer is already half full.
+// Frames are superseded 60 times a second, so dropping one costs nothing; the
+// free half keeps room for replies. A client that refuses stuckFrames in a
+// row isn't reading at all, and its connection is closed (readPump then
+// unregisters it). Called under the hub's read lock from several
+// goroutines; close and the counter are both safe for that.
+func (c *Client) offerFrame(frame []byte) {
+	if len(c.send) < cap(c.send)/2 {
+		select {
+		case c.send <- frame:
+			c.dropped.Store(0)
+			return
+		default:
+		}
+	}
+	if c.dropped.Add(1) == stuckFrames && c.conn != nil {
+		log.Printf("Client %s stopped reading, disconnecting", c.id)
+		c.conn.Close()
 	}
 }
 
@@ -582,31 +464,42 @@ func (c *Client) writePump() {
 	}
 }
 
-// ServeWs handles WebSocket requests from clients
+// ServeWs handles WebSocket requests from clients. The connection caps are
+// checked before the upgrade, so a refused connection costs nothing.
 func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
+	ip := netutil.ClientIP(r)
+	if ok, reason := hub.reserve(ip); !ok {
+		log.Printf("WebSocket refused for %s: %s", ip, reason)
+		http.Error(w, reason, http.StatusServiceUnavailable)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		hub.mu.Lock()
+		hub.releaseLocked(ip)
+		hub.mu.Unlock()
 		log.Println(err)
 		return
 	}
 
 	client := &Client{
-		hub:  hub,
-		conn: conn,
-		send: make(chan []byte, 256),
-		id:   generateClientID(),
+		hub:      hub,
+		conn:     conn,
+		send:     make(chan []byte, sendBuffer),
+		id:       generateClientID(),
+		ip:       ip,
+		reserved: true,
 	}
 
 	client.hub.register <- client
 
-	// Start goroutines for reading and writing
 	go client.writePump()
 	go client.readPump()
 }
 
 // clientIDCounter disambiguates connections; the old timestamp-only format
-// ("...05999" — the bare 999 is a literal, not fractional seconds) gave every
-// connection in the same wall-clock second an identical ID.
+// gave every connection in the same wall-clock second an identical ID.
 var clientIDCounter atomic.Uint64
 
 func generateClientID() string {

@@ -6,6 +6,7 @@ import SettingsMenu from './ui/SettingsMenu'
 import { useWebSocket } from './hooks/useWebSocket'
 import { Difficulty, GameState, newPlacementCheckStore } from './types/game'
 import { sound } from './audio/sound'
+import { RESET_GUARD_MS, isFreshRun, readRoomCode, writeRoomCode } from './session'
 
 // Dev: Vite serves the client on 5173, Go server runs separately on 8080.
 // Production build: the Go server serves the client itself, so derive the
@@ -13,7 +14,7 @@ import { sound } from './audio/sound'
 const WS_URL = import.meta.env.DEV
   ? 'ws://localhost:8080/ws'
   : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
-const ROOM_ID = 'game-1'
+
 
 // The server broadcasts 60 snapshots/sec. The canvas reads every one through
 // liveStateRef, but React (header, panels, buttons) only needs event-frequency
@@ -40,8 +41,12 @@ const defaultGameState: GameState = {
 }
 
 function App() {
-  const { status, subscribe, sendMessage } = useWebSocket(WS_URL)
+  const { status, subscribe, sendMessage, reconnectNow } = useWebSocket(WS_URL)
   const [hasJoined, setHasJoined] = useState(false)
+  // The server says (in the join reply) whether debug spawns are enabled;
+  // the DEBUG button only exists when they are.
+  const [debugAllowed, setDebugAllowed] = useState(false)
+  const [joinError, setJoinError] = useState<string | null>(null)
   const [showDebug, setShowDebug] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [gameState, setGameState] = useState<GameState>(defaultGameState)
@@ -56,14 +61,20 @@ function App() {
   // check_placement answers, shared with GameCanvas: App writes replies here,
   // the canvas requests, reads and invalidates. See PlacementCheckStore.
   const placementChecksRef = useRef(newPlacementCheckStore())
+  // Set by New Game; see RESET_GUARD_MS.
+  const resetGuardUntilRef = useRef(0)
 
   // Browsers only allow audio after a user gesture: the first pointer/key
   // input unlocks the AudioContext and starts the ambient music loop.
   useEffect(() => {
+    // Listeners stay until audio is really running: Chrome doesn't count
+    // some first keys (Esc, Tab) as a gesture.
     const unlock = () => {
-      sound.unlock()
-      window.removeEventListener('pointerdown', unlock)
-      window.removeEventListener('keydown', unlock)
+      void sound.unlock().then(running => {
+        if (!running) return
+        window.removeEventListener('pointerdown', unlock)
+        window.removeEventListener('keydown', unlock)
+      })
     }
     window.addEventListener('pointerdown', unlock)
     window.addEventListener('keydown', unlock)
@@ -73,14 +84,27 @@ function App() {
     }
   }, [])
 
+  // Join on every new connection (connectionId bumps per connect): the
+  // server forgets a socket's room the moment it drops, so a reconnect must
+  // rejoin, resuming this tab's room when the server still has it.
   useEffect(() => {
-    if (status.isConnected && !hasJoined) {
-      sendMessage({
-        type: 'join_room',
-        room_id: ROOM_ID,
-      })
+    if (!status.isConnected) {
+      setHasJoined(false)
+      return
     }
-  }, [status.isConnected, hasJoined, sendMessage])
+    const resume = readRoomCode()
+    sendMessage({ type: 'join_room', ...(resume ? { payload: { resume } } : {}) })
+  }, [status.isConnected, status.connectionId, sendMessage])
+
+  // A full server refuses the join; try again every 10 s while connected.
+  useEffect(() => {
+    if (!joinError || !status.isConnected) return
+    const retry = setTimeout(() => {
+      setJoinError(null)
+      sendMessage({ type: 'join_room' })
+    }, 10000)
+    return () => clearTimeout(retry)
+  }, [joinError, status.isConnected, sendMessage])
 
   useEffect(() => {
     const commitNow = () => {
@@ -111,9 +135,20 @@ function App() {
 
     const unsubscribe = subscribe(message => {
       if (message.type === 'join_room') {
+        const p = message.payload ?? {}
+        if (p.status !== 'joined') {
+          setHasJoined(false)
+          setJoinError('The server is full right now. Retrying…')
+          return
+        }
+        if (typeof p.room_code === 'string') writeRoomCode(p.room_code)
+        setDebugAllowed(p.debug_spawn === true)
+        setJoinError(null)
         setHasJoined(true)
-        if (message.payload?.state) {
-          liveStateRef.current = message.payload.state
+        resetGuardUntilRef.current = 0
+        if (p.state) {
+          liveStateRef.current = p.state
+          lastExplosionIdRef.current = 0
           commitNow()
         }
         return
@@ -145,6 +180,10 @@ function App() {
 
       if (message.type === 'game_state' && message.payload?.state) {
         const incoming: GameState = message.payload.state
+        if (resetGuardUntilRef.current) {
+          if (!isFreshRun(incoming) && Date.now() < resetGuardUntilRef.current) return
+          resetGuardUntilRef.current = 0
+        }
         const prevPhase = liveStateRef.current.phase
         const phaseChanged = incoming.phase !== prevPhase
 
@@ -152,7 +191,7 @@ function App() {
         if (phaseChanged) {
           if (prevPhase === 'waiting' && incoming.phase === 'active') {
             sound.waveStart()
-          } else if (incoming.phase === 'game_over') {
+          } else if (prevPhase === 'active' && incoming.phase === 'game_over') {
             sound.gameOver()
           }
         }
@@ -193,7 +232,6 @@ function App() {
     if (!hasJoined) return
     sendMessage({
       type: 'place_tower',
-      room_id: ROOM_ID,
       payload: { x, y, tower_type: towerType }
     })
   }, [hasJoined, sendMessage])
@@ -204,7 +242,6 @@ function App() {
     if (!hasJoined) return
     sendMessage({
       type: 'check_placement',
-      room_id: ROOM_ID,
       payload: { x, y }
     })
   }, [hasJoined, sendMessage])
@@ -213,7 +250,6 @@ function App() {
     if (!hasJoined) return
     sendMessage({
       type: 'remove_tower',
-      room_id: ROOM_ID,
       payload: { tower_id: towerId }
     })
   }, [hasJoined, sendMessage])
@@ -222,7 +258,6 @@ function App() {
     if (!hasJoined) return
     sendMessage({
       type: 'upgrade_tower',
-      room_id: ROOM_ID,
       payload: { tower_id: towerId }
     })
   }, [hasJoined, sendMessage])
@@ -231,14 +266,13 @@ function App() {
     if (!hasJoined) return
     sendMessage({
       type: 'evolve_tower',
-      room_id: ROOM_ID,
       payload: { tower_id: towerId, evolution }
     })
   }, [hasJoined, sendMessage])
 
   const handleStartWave = useCallback(() => {
     if (!hasJoined || liveStateRef.current.phase !== 'waiting') return
-    sendMessage({ type: 'start_wave', room_id: ROOM_ID })
+    sendMessage({ type: 'start_wave' })
   }, [hasJoined, sendMessage])
 
   // mapId (optional) selects the map for the fresh run; omitted = keep the
@@ -253,10 +287,11 @@ function App() {
     if (endless !== undefined) payload.endless = endless
     sendMessage({
       type: 'new_game',
-      room_id: ROOM_ID,
       ...(Object.keys(payload).length ? { payload } : {}),
     })
     liveStateRef.current = defaultGameState
+    lastExplosionIdRef.current = 0 // effect IDs restart, so the first boom plays
+    resetGuardUntilRef.current = Date.now() + RESET_GUARD_MS
     setGameState(defaultGameState)
   }, [hasJoined, sendMessage])
 
@@ -264,7 +299,7 @@ function App() {
   // No local state reset — the run carries on from exactly where it is.
   const handleContinueEndless = useCallback(() => {
     if (!hasJoined) return
-    sendMessage({ type: 'continue_endless', room_id: ROOM_ID })
+    sendMessage({ type: 'continue_endless' })
   }, [hasJoined, sendMessage])
 
   // Debug-panel helper: the server computes the spawn path itself.
@@ -272,7 +307,6 @@ function App() {
     if (!hasJoined) return
     sendMessage({
       type: 'spawn_enemy',
-      room_id: ROOM_ID,
       payload: { enemy_type: 'basic' }
     })
   }, [hasJoined, sendMessage])
@@ -282,26 +316,56 @@ function App() {
   const speed = gameState.speed_multiplier ?? 1
   const paused = gameState.paused ?? false
 
+  const handleSetSpeed = useCallback((s: number) => {
+    if (!hasJoined) return
+    sendMessage({ type: 'set_speed', payload: { speed: s } })
+  }, [hasJoined, sendMessage])
+
+  const handleTogglePause = useCallback(() => {
+    if (!hasJoined) return
+    sendMessage({ type: 'pause_game', payload: { paused: !liveStateRef.current.paused } })
+  }, [hasJoined, sendMessage])
+
+  // Stable, so SettingsMenu's Escape listener isn't re-bound on every
+  // throttled state commit.
+  const closeSettings = useCallback(() => setShowSettings(false), [])
+
+  const connectionLabel = status.isConnected
+    ? (hasJoined ? 'ONLINE' : (joinError ? 'SERVER FULL' : 'JOINING…'))
+    : (status.connectionId > 0 ? 'OFFLINE' : 'CONNECTING…')
+
   return (
     <div className="App">
       <header className="App-header">
         <h1>🦀 Rust Rush — Tower Defense</h1>
         <div className="status">
-          <span className={status.isConnected ? 'connected' : 'disconnected'}>
-            ● {status.isConnected ? 'ONLINE' : 'CONNECTING…'}
+          <span className={status.isConnected && hasJoined ? 'connected' : 'disconnected'} role="status" aria-live="polite">
+            ● {connectionLabel}
+            {(status.error || joinError) && <span className="connection-note"> {joinError ?? status.error}</span>}
           </span>
-          <button
-            className={`btn btn-inline ${showDebug ? 'btn-toggled' : ''}`}
-            onClick={() => setShowDebug(!showDebug)}
-          >
-            DEBUG
-          </button>
+          {!status.isConnected && status.struggling && (
+            <button className="btn btn-inline" onClick={reconnectNow} title="Try to reconnect right now">
+              RECONNECT
+            </button>
+          )}
+          {debugAllowed && (
+            <button
+              className={`btn btn-inline ${showDebug ? 'btn-toggled' : ''}`}
+              onClick={() => setShowDebug(!showDebug)}
+              aria-pressed={showDebug}
+            >
+              DEBUG
+            </button>
+          )}
           <span className="speed-control">
             {[1, 2, 3].map(s => (
               <button
                 key={s}
                 className={`btn btn-inline ${speed === s ? 'btn-toggled' : ''}`}
-                onClick={() => sendMessage({ type: 'set_speed', room_id: ROOM_ID, payload: { speed: s } })}
+                onClick={() => handleSetSpeed(s)}
+                disabled={!hasJoined}
+                aria-pressed={speed === s}
+                aria-label={`${s}x speed`}
                 title={`Run the game at ${s}x speed`}
               >
                 ×{s}
@@ -309,7 +373,10 @@ function App() {
             ))}
             <button
               className={`btn btn-inline ${paused ? 'btn-toggled' : ''}`}
-              onClick={() => sendMessage({ type: 'pause_game', room_id: ROOM_ID, payload: { paused: !paused } })}
+              onClick={handleTogglePause}
+              disabled={!hasJoined}
+              aria-pressed={paused}
+              aria-label={paused ? 'Resume' : 'Pause'}
               title={paused ? 'Resume the game' : 'Pause — freezes everything in place'}
             >
               {paused ? '▶' : '⏸'}
@@ -324,7 +391,7 @@ function App() {
           </button>
         </div>
 
-        {showDebug && (
+        {showDebug && debugAllowed && (
           <div className="debug-info" style={{
             fontSize: '11px',
             marginTop: '10px',
@@ -385,7 +452,7 @@ function App() {
 
       {showSettings && (
         <ErrorBoundary section="SETTINGS">
-          <SettingsMenu onClose={() => setShowSettings(false)} />
+          <SettingsMenu onClose={closeSettings} />
         </ErrorBoundary>
       )}
 
@@ -405,7 +472,7 @@ function App() {
           onSpawnEnemy={handleSpawnEnemy}
           onCheckPlacement={handleCheckPlacement}
           placementChecksRef={placementChecksRef}
-          showDebug={showDebug}
+          showDebug={showDebug && debugAllowed}
           />
         </ErrorBoundary>
       </main>

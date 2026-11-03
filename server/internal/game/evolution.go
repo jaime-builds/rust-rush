@@ -122,7 +122,7 @@ func (gs *GameStateWithShooting) EvolveTower(towerID int, evolution string) (Tow
 		if tower.Evolved {
 			return Tower{}, ErrAlreadyEvolved
 		}
-		if tower.Level < 4 {
+		if tower.Level < maxTowerLevel {
 			return Tower{}, ErrNotMaxLevel
 		}
 		options, ok := evolutionOptions[tower.TowerType]

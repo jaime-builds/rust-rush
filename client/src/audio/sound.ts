@@ -62,12 +62,24 @@ class SoundEngine {
   // unlock creates (or resumes) the AudioContext and starts the music loop.
   // Must be called from a user-gesture handler the first time; safe to call
   // repeatedly.
-  unlock(): void {
-    if (!this.audible()) return // stay silent (and free) until switched on
+  //
+  // Resolves true once audio is actually running (or the player has muted,
+  // in which case the mute toggle does the unlocking later). Some first key
+  // presses (Esc, Tab, bare modifiers) don't count as a user gesture in
+  // Chrome, so the context stays suspended; callers keep listening until
+  // this resolves true.
+  async unlock(): Promise<boolean> {
+    if (!this.audible()) return true // stay silent (and free) until switched on
     this.ensureContext()
-    if (this.ctx && this.ctx.state === 'suspended') {
-      void this.ctx.resume()
+    if (!this.ctx) return false
+    if (this.ctx.state === 'suspended') {
+      try {
+        await this.ctx.resume()
+      } catch {
+        return false
+      }
     }
+    return this.ctx.state === 'running'
   }
 
   // toggleMute flips and persists the mute state. Returns the new state.
@@ -320,7 +332,20 @@ class SoundEngine {
     }
   }
 
+  // The explosion noise is the same 0.3 s of white noise every time, so it
+  // is built once per context instead of per explosion.
+  private cachedNoise: AudioBuffer | null = null
+
   private noiseBuffer(ctx: AudioContext, seconds: number): AudioBuffer {
+    const want = Math.ceil(ctx.sampleRate * seconds)
+    if (this.cachedNoise && this.cachedNoise.length === want && this.cachedNoise.sampleRate === ctx.sampleRate) {
+      return this.cachedNoise
+    }
+    this.cachedNoise = this.makeNoise(ctx, seconds)
+    return this.cachedNoise
+  }
+
+  private makeNoise(ctx: AudioContext, seconds: number): AudioBuffer {
     const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * seconds), ctx.sampleRate)
     const data = buf.getChannelData(0)
     for (let i = 0; i < data.length; i++) {

@@ -17,6 +17,9 @@ function formatEndedAt(iso: string): string {
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString()
 }
 
+// How often the dashboard refreshes itself (concurrent players is live).
+const REFRESH_MS = 30000
+
 // The private stats dashboard. The session lives in an HTTP-only cookie, so
 // "am I logged in?" is only ever answered by the server: a 401 from /stats is
 // the signal to bounce back to the login page.
@@ -24,14 +27,15 @@ export default function AdminStats({ navigate }: Props) {
   const [stats, setStats] = useState<StatsResponse | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const [refreshTick, setRefreshTick] = useState(0)
 
   useEffect(() => {
-    let cancelled = false
+    const controller = new AbortController()
 
     const load = async () => {
       try {
-        const res = await fetch('/stats', { credentials: 'same-origin' })
-        if (cancelled) return
+        const res = await fetch('/stats', { credentials: 'same-origin', signal: controller.signal })
         if (res.status === 401) {
           navigate(ADMIN_LOGIN_PATH)
           return
@@ -40,28 +44,47 @@ export default function AdminStats({ navigate }: Props) {
           setError(`Could not load stats (${res.status}).`)
           return
         }
-        setStats(await res.json())
+        let body: StatsResponse
+        try {
+          body = await res.json()
+        } catch {
+          // A 200 that isn't JSON: most likely the page fallback answered
+          // instead of the stats API (dev proxy misconfigured).
+          setError('The server sent something other than stats.')
+          return
+        }
+        setStats(body)
+        setError('')
+        setUpdatedAt(new Date())
       } catch {
-        if (!cancelled) setError('Could not reach the server.')
+        if (!controller.signal.aborted) setError('Could not reach the server.')
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!controller.signal.aborted) setLoading(false)
       }
     }
 
     load()
-    return () => { cancelled = true }
-  }, [navigate])
+    const timer = setInterval(load, REFRESH_MS)
+    return () => {
+      controller.abort()
+      clearInterval(timer)
+    }
+  }, [navigate, refreshTick])
 
   const handleLogout = useCallback(async () => {
     try {
       await fetch('/admin/logout', { method: 'POST', credentials: 'same-origin' })
-    } finally {
-      navigate(ADMIN_LOGIN_PATH)
+    } catch {
+      // Network failure: the session may still be valid server-side until
+      // it expires, but there's nothing more to do from here.
     }
+    navigate(ADMIN_LOGIN_PATH)
   }, [navigate])
 
+  const handleRefresh = useCallback(() => setRefreshTick(n => n + 1), [])
+
   if (loading) {
-    return <div className="admin-page"><p className="admin-loading">Loading stats…</p></div>
+    return <div className="admin-page"><p className="admin-loading" role="status">Loading stats…</p></div>
   }
 
   if (error || !stats) {
@@ -81,8 +104,13 @@ export default function AdminStats({ navigate }: Props) {
     <div className="admin-page admin-stats">
       <header className="admin-stats-header">
         <h1 className="admin-title">🦀 Rust Rush — Stats</h1>
+        <span className="admin-updated" role="status">
+          {updatedAt && `Updated ${updatedAt.toLocaleTimeString()}`}
+        </span>
+        <button className="admin-btn" onClick={handleRefresh}>REFRESH</button>
         <button className="admin-btn" onClick={handleLogout}>LOG OUT</button>
       </header>
+      {error && <p className="admin-error" role="alert">{error}</p>}
 
       <div className="admin-tiles">
         <div className="admin-panel admin-tile">
@@ -97,6 +125,7 @@ export default function AdminStats({ navigate }: Props) {
 
       <section className="admin-panel admin-section">
         <h2 className="admin-section-title">Wave distribution</h2>
+        <p className="admin-note">Finished runs only (game over or zone secured). Runs abandoned with New Game aren't recorded.</p>
         {stats.wave_distribution.length === 0 ? (
           <p className="admin-empty">No games recorded yet.</p>
         ) : (
@@ -134,7 +163,7 @@ export default function AdminStats({ navigate }: Props) {
             </thead>
             <tbody>
               {stats.top_scores.map((game, i) => (
-                <tr key={`${game.ended_at}-${game.score}`}>
+                <tr key={`${i}-${game.ended_at}-${game.score}`}>
                   <td className="admin-rank">{i + 1}</td>
                   <td className="admin-score">{game.score.toLocaleString()}</td>
                   <td>{game.wave}</td>
