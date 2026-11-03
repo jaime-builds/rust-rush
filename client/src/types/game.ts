@@ -56,6 +56,15 @@ export interface Tower {
   next?: TowerPreview
 }
 
+// A signed-in player's autosaved run, as the join reply describes it.
+export interface SaveSummary {
+  map_id: string
+  wave: number
+  difficulty: Difficulty
+  endless: boolean
+  saved_at: string
+}
+
 // A tower's stats at its next level, as the server will set them.
 export interface TowerPreview {
   level: number

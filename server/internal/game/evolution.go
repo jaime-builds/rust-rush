@@ -142,6 +142,7 @@ func (gs *GameStateWithShooting) EvolveTower(towerID int, evolution string) (Tow
 		gs.Gold -= cost
 		tower.TotalSpent += cost
 		tower.Evolved = true
+		gs.emitLocked(Event{Kind: EventEvolved, Base: tower.TowerType})
 		tower.TowerType = evolution
 
 		// Stats come fresh from the authored table; specials are cleared

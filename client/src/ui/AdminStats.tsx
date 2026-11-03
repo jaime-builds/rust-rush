@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ADMIN_LOGIN_PATH, StatsResponse } from '../types/stats'
+import AdminPlayers from './AdminPlayers'
 
 interface Props {
   navigate: (to: string) => void
@@ -175,6 +176,8 @@ export default function AdminStats({ navigate }: Props) {
           </table>
         )}
       </section>
+
+      <AdminPlayers />
     </div>
   )
 }

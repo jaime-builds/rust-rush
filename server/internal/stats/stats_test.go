@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
@@ -128,5 +129,42 @@ func TestHandlerReportsQueryFailure(t *testing.T) {
 	}
 	if body := rec.Body.String(); body != "stats query failed\n" {
 		t.Errorf("body = %q, want the generic message only", body)
+	}
+}
+
+// A database created before accounts existed gains the run columns on open,
+// keeps its rows, and accepts the new fields.
+func TestOpenMigratesOldGamesTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Exec(`CREATE TABLE games (id INTEGER PRIMARY KEY AUTOINCREMENT, ended_at TEXT NOT NULL,
+		wave INTEGER NOT NULL, score INTEGER NOT NULL, duration_seconds REAL NOT NULL)`)
+	old.Exec(`INSERT INTO games (ended_at, wave, score, duration_seconds) VALUES ('2026-08-01T00:00:00Z', 4, 400, 60)`)
+	old.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on an old database: %v", err)
+	}
+	defer s.Close()
+	if n, _ := s.TotalGames(); n != 1 {
+		t.Errorf("old row lost: total %d", n)
+	}
+	if err := s.RecordGame(GameRecord{EndedAt: time.Now(), Wave: 5, Score: 500, UserID: 9, MapID: "open", Difficulty: "harder", Victory: true}); err != nil {
+		t.Fatalf("RecordGame with run details: %v", err)
+	}
+	var user int64
+	var mapID, diff string
+	s.DB().QueryRow(`SELECT user_id, map_id, difficulty FROM games WHERE score = 500`).Scan(&user, &mapID, &diff)
+	if user != 9 || mapID != "open" || diff != "harder" {
+		t.Errorf("stored run details: user=%d map=%q difficulty=%q", user, mapID, diff)
+	}
+	if s2, err := Open(path); err != nil {
+		t.Errorf("second Open (migration must be idempotent): %v", err)
+	} else {
+		s2.Close()
 	}
 }

@@ -188,6 +188,35 @@ Tesla chain jumps and reach, Barrage volley size), plus a NEXT line listing
 exactly what the next upgrade changes. Both come from the server, so they
 always match what an upgrade actually does.
 
+### Accounts, leaderboard, saves, achievements
+Accounts are optional; guests play exactly as before.
+- **Accounts:** username and password, no email (so a forgotten password
+  can't be recovered). Passwords are stored as Argon2id hashes with a random
+  salt each; sessions are an HTTP-only cookie whose token is stored only as
+  a SHA-256 hash. Limits per visitor: 10 failed logins per 15 minutes, 5 new
+  accounts per hour. Usernames are 3 to 20 letters, digits, `_` or `-`,
+  with official-sounding names reserved. Signing in mid-run keeps the run.
+  An account has one live game: every tab and device it opens joins it.
+- **Leaderboard:** public, top 10 per zone, Normal and Harder ranked
+  separately, each player once with their best finished run. Only runs by
+  signed-in players count, and every score is computed by the server.
+- **Saves:** one automatic save per account, always the latest state,
+  written at every wave break, when the room closes (mid-wave included) and
+  when the server shuts down. The map screen offers Continue, which resumes
+  paused. There's no manual save and no older copy to reload, so a run can't
+  be save-scummed; a finished run or a new game removes the save.
+- **Achievements:** 12, awarded by the server from what happens in your
+  runs (First Contact, Zone Secured, Full Sweep, Hard Line, Hardened,
+  Untouched, Endurance, Metamorph, Full Spectrum, Fortress, Minimalist,
+  Boss Breaker), with an unlock toast and progress for the cumulative ones.
+- **Moderation:** the admin page lists players and can rename or remove
+  one. Deleting an account (by the player or the operator) removes its save
+  and achievements; its leaderboard entries disappear, and the anonymous game
+  stats stay.
+
+Everything lives in the same SQLite file as the private stats (`STATS_DB`),
+so back up that one file.
+
 ## 🏗️ Architecture
 
 ### Server-Authoritative Design
@@ -338,11 +367,15 @@ rust-rush/
 │   ├── main.go                # Entry point: WebSocket + static serving + /stats + /admin
 │   ├── e2e_test.go            # End-to-end WebSocket game flow test
 │   └── internal/
+│       ├── accounts/          # Player accounts (Argon2id), sessions, leaderboard,
+│       │                      #   saves, achievements, admin moderation API
 │       ├── admin/
 │       │   └── admin.go       # Single-operator login, session cookie, /stats gate
 │       ├── game/
 │       │   ├── state.go       # Game state, towers, enemies, wave config, win/victory
-│       │   ├── manager.go     # Game loop, wave spawner
+│       │   ├── manager.go     # Rooms, game loop, wave spawner, one room per account
+│       │   ├── saves.go       # Autosave format, save queue, resume mid-wave
+│       │   ├── events.go      # Run events that feed achievements
 │       │   ├── map.go         # 6-map registry, sequence order, win waves
 │       │   └── *_test.go      # Behavior, pathfinding equivalence, progression, map-sim tests
 │       ├── stats/
@@ -352,12 +385,16 @@ rust-rush/
 │           └── client.go      # Client connection & message handlers
 └── client/
     └── src/
-        ├── App.tsx            # WS wiring, UI state throttling, debug panel
+        ├── App.tsx            # WS wiring, UI state throttling, account/leaderboard/achievements
+        ├── account/
+        │   └── api.ts         # Account, leaderboard and achievements API calls
         ├── settings.ts        # Effect preferences (localStorage-backed)
         ├── audio/
         │   └── sound.ts       # Procedural Web Audio engine (music + SFX)
         ├── game/
-        │   └── GameCanvas.tsx # Rendering, input, map select, victory/game-over overlays
+        │   ├── GameCanvas.tsx # Render loop, input, map select, panels, overlays
+        │   ├── draw.ts        # Canvas drawing: map, gates, towers, enemies, projectiles, effects
+        │   └── theme.ts, shapes.ts, effects.ts, icons.tsx, progress.ts, towerStats.ts
         ├── hooks/
         │   └── useWebSocket.ts
         ├── types/
@@ -367,6 +404,10 @@ rust-rush/
             ├── AdminApp.tsx      # /admin router (pathname-based, no router dep)
             ├── AdminLogin.tsx    # Login form → POST /admin/login
             ├── AdminStats.tsx    # Stats dashboard + logout
+            ├── AdminPlayers.tsx  # Player search, rename, remove (admin)
+            ├── AccountDialog.tsx # Sign in / create account / change password / delete
+            ├── LeaderboardDialog.tsx
+            ├── AchievementsDialog.tsx
             ├── SettingsMenu.tsx  # Settings modal (4 toggles: shake/pulse/beam-down/sound)
             └── ErrorBoundary.tsx # Wraps the game view, settings menu, and admin pages
 ```
@@ -453,8 +494,6 @@ cd server && go run main.go
 
 ### Long Term
 - Multiplayer lobby
-- User accounts and a real leaderboard
-- Achievements
 - Mobile version
 
 ## 📜 License

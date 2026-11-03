@@ -330,3 +330,17 @@
   outline: 2px solid currentColor;
   outline-offset: 2px;
 }
+
+.admin-players-search { display: flex; gap: 8px; margin-bottom: 12px; }
+.admin-players-search input,
+.admin-inline-form input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--line, #334);
+  color: inherit;
+  font: inherit;
+  padding: 6px 8px;
+}
+.admin-inline-form { display: flex; gap: 6px; }
+.admin-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.admin-btn-danger { color: var(--danger); border-color: var(--danger); }

@@ -252,7 +252,7 @@ type GameStateWithShooting struct {
 	// dies doesn't produce a second row). Called on its own goroutine so
 	// slow consumers (the stats DB write) never stall the 60 FPS loop.
 	// Set at room creation, before the game loop starts — never mutated after.
-	OnGameOver func(wave, score int, duration float64) `json:"-"`
+	OnGameOver func(RunResult) `json:"-"`
 	// runRecorded: OnGameOver already fired for this run (see above).
 	runRecorded bool
 	// mapDef is the room's active map (obstacles + flat lookup grid). Only
@@ -268,6 +268,46 @@ type GameStateWithShooting struct {
 	// players). The manager's loop deletes rooms empty for longer than the
 	// idle grace period. Guarded by mu.
 	emptySince time.Time
+	// OwnerID is the account that owns the room (0 = a guest). Set when a
+	// signed-in player creates or claims the room; it tags the run for the
+	// leaderboard, saves and achievements. Guarded by mu.
+	OwnerID int64 `json:"-"`
+	// mgr is the manager that owns the room (nil in bare test rooms); rooms
+	// queue autosaves through it.
+	mgr *Manager
+	// spawnedThisWave counts the current wave's spawns, so a wave restored
+	// from a save resumes its spawner where it stopped.
+	spawnedThisWave int
+	// tookDamage: an enemy leaked at some point this run (the Untouched
+	// achievement needs a run that never did).
+	tookDamage bool
+}
+
+// RunResult describes one finished run (game over, or victory: the first
+// terminal transition). The stats row and the leaderboard come from it.
+type RunResult struct {
+	Wave       int
+	Score      int
+	Duration   float64
+	MapID      string
+	Difficulty string
+	Endless    bool
+	Victory    bool
+	OwnerID    int64
+}
+
+// SetOwner records which account owns the room (0 = guest).
+func (gs *GameStateWithShooting) SetOwner(userID int64) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	gs.OwnerID = userID
+}
+
+// Owner returns the owning account (0 = guest).
+func (gs *GameStateWithShooting) Owner() int64 {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	return gs.OwnerID
 }
 
 func NewGameStateWithShooting(roomID string) *GameStateWithShooting {
@@ -357,6 +397,8 @@ func (gs *GameStateWithShooting) resetLocked() {
 	gs.Difficulty = DifficultyNormal
 	gs.Endless = false
 	gs.runRecorded = false
+	gs.spawnedThisWave = 0
+	gs.tookDamage = false
 	gs.nextTowerID = 1
 	gs.nextEnemyID = 1
 	gs.nextProjectileID = 1
@@ -403,6 +445,7 @@ func (gs *GameStateWithShooting) Update(deltaTime float64) {
 		}
 		gs.Score += bonus
 		gs.Wave++
+		gs.emitLocked(Event{Kind: EventWaveReached, Wave: gs.Wave, Endless: gs.Endless, Untouched: !gs.tookDamage})
 
 		// Win check, parallel to the game-over check above: the moment the
 		// wave counter reaches the map's WinWave, a non-Endless run is won.
@@ -413,7 +456,13 @@ func (gs *GameStateWithShooting) Update(deltaTime float64) {
 		// Update early-returns in the victory phase, so this fires once.
 		if !gs.Endless && gs.mapDef.WinWave > 0 && gs.Wave >= gs.mapDef.WinWave {
 			gs.Phase = PhaseVictory
+			gs.emitLocked(Event{Kind: EventVictory, MapID: gs.MapID, Sequence: gs.mapDef.SequenceOrder,
+				Difficulty: gs.Difficulty, TowerCount: len(gs.Towers)})
 			gs.fireRunCompleteLocked()
+		}
+		// Every wave break is an autosave point.
+		if gs.Phase == PhaseWaiting {
+			gs.checkpointLocked()
 		}
 	}
 }
@@ -423,11 +472,23 @@ func (gs *GameStateWithShooting) Update(deltaTime float64) {
 // into Endless that later dies must not produce a second stats row). Caller
 // holds gs.mu.
 func (gs *GameStateWithShooting) fireRunCompleteLocked() {
+	// Every terminal transition drops the autosave, including the eventual
+	// loss of a victory continued into Endless (which records no second
+	// stats row): otherwise Continue could revive a run that already ended.
+	// Queued after any earlier save, so one still being written can't
+	// bring it back.
+	if gs.OwnerID > 0 && gs.mgr != nil {
+		gs.mgr.queueDiscard(gs.OwnerID)
+	}
 	if gs.runRecorded || gs.OnGameOver == nil {
 		return
 	}
 	gs.runRecorded = true
-	go gs.OnGameOver(gs.Wave, gs.Score, gs.GameTime)
+	go gs.OnGameOver(RunResult{
+		Wave: gs.Wave, Score: gs.Score, Duration: gs.GameTime,
+		MapID: gs.MapID, Difficulty: gs.Difficulty, Endless: gs.Endless,
+		Victory: gs.Phase == PhaseVictory, OwnerID: gs.OwnerID,
+	})
 }
 
 func (gs *GameStateWithShooting) AddEnemy(enemyType string, path []Position, wave int) Enemy {
@@ -453,6 +514,7 @@ func (gs *GameStateWithShooting) BeginWave() (wave int, config WaveConfig, cance
 	}
 	gs.Phase = PhaseActive
 	gs.EnemiesRemaining = total
+	gs.spawnedThisWave = 0
 	return gs.Wave, config, gs.spawnCancel, true
 }
 
@@ -475,6 +537,7 @@ func (gs *GameStateWithShooting) SpawnForWave(cancel <-chan struct{}, enemyType 
 	if gs.EnemiesRemaining > 0 {
 		gs.EnemiesRemaining--
 	}
+	gs.spawnedThisWave++
 	return true
 }
 

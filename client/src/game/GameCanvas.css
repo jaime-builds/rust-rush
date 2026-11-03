@@ -1036,3 +1036,79 @@
   white-space: nowrap;
 }
 .selected-stat .value { white-space: nowrap; }
+
+/* Account dialog */
+.account-box { width: 420px; }
+.account-form { display: flex; flex-direction: column; gap: 12px; margin: 14px 0; }
+.account-tabs { display: flex; gap: 8px; justify-content: center; }
+.account-note { margin: 0; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+.account-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; letter-spacing: 0.12em; color: var(--text-dim); }
+.account-field input {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  letter-spacing: normal;
+  padding: 8px 10px;
+}
+.account-field input:focus-visible { outline: 2px solid var(--ok); outline-offset: 1px; }
+.account-error { margin: 0; color: var(--danger); font-size: 12px; }
+.account-notice { margin: 0; color: var(--ok); font-size: 12px; }
+.account-signed-in { margin: 0; text-align: center; }
+.account-section { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+.account-section-title { font-size: 11px; font-weight: 600; letter-spacing: 0.15em; color: var(--gold); }
+.account-section-title.danger { color: var(--danger); }
+
+/* Leaderboard dialog */
+.leaderboard-box { width: 460px; }
+.leaderboard-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin: 14px 0; }
+.leaderboard-select { display: flex; gap: 8px; align-items: center; font-size: 11px; letter-spacing: 0.12em; color: var(--text-dim); }
+.leaderboard-select select { background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line); color: var(--text); font: inherit; padding: 6px 8px; }
+.leaderboard-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 10px; }
+.leaderboard-table th { font-size: 10px; letter-spacing: 0.15em; color: var(--text-dim); text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.leaderboard-table td { padding: 6px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
+.leaderboard-table td:nth-child(3), .leaderboard-table th:nth-child(3) { text-align: right; }
+.leaderboard-me td { color: var(--gold); font-weight: 600; }
+.leaderboard-gap td { border-top: 1px dashed var(--line); }
+
+/* Saved run banner on the map screen */
+.map-select-continue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 10px 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--gold);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--gold);
+}
+
+/* Achievements dialog */
+.achievements-box { width: 480px; max-height: 86vh; overflow-y: auto; }
+.achievements-count { text-align: center; font-size: 11px; letter-spacing: 0.15em; color: var(--gold); margin: 8px 0; }
+.achievements-group { margin: 12px 0; }
+.achievements-group ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.achievement { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.04); color: var(--text-dim); }
+.achievement.unlocked { color: var(--text); }
+.achievement-mark { font-size: 14px; width: 16px; text-align: center; }
+.achievement.unlocked .achievement-mark { color: var(--gold); }
+.achievement-body { display: flex; flex-direction: column; flex: 1; }
+.achievement-name { font-size: 13px; font-weight: 600; letter-spacing: 0.08em; }
+.achievement-desc { font-size: 11px; opacity: 0.85; }
+.achievement-progress { font-size: 11px; color: var(--text-dim); }
+
+/* Achievement unlocked toast */
+.achievement-toasts { position: fixed; top: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+.achievement-toast {
+  background: rgba(10, 14, 20, 0.95);
+  border: 1px solid var(--gold);
+  padding: 10px 14px;
+  min-width: 240px;
+  box-shadow: 0 0 18px rgba(255, 200, 0, 0.25);
+}
+.achievement-toast-title { font-size: 10px; letter-spacing: 0.2em; color: var(--gold); }
+.achievement-toast-name { font-size: 14px; font-weight: 600; margin-top: 2px; }
+.achievement-toast-desc { font-size: 11px; color: var(--text-dim); }

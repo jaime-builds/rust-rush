@@ -415,3 +415,66 @@ func TestPlayerCountOnlyCountsJoined(t *testing.T) {
 		t.Errorf("PlayerCount = %d, want 1 (the idle socket never joined)", got)
 	}
 }
+
+// Accounts: a signed-in player's new room is theirs; a guest room is claimed
+// when its player logs in and resumes it; an owned room can't be resumed by
+// a guest or by another account (they get a fresh room instead).
+func TestRoomOwnershipOnResume(t *testing.T) {
+	hub := NewHub(game.NewManager())
+	guest := newClientOn(hub, "guest")
+	code := join(t, guest, "")
+	defer closeRoom(hub, code)
+	room, _ := hub.gameManager.GetShootingRoom(code)
+	if room.Owner() != 0 {
+		t.Fatalf("guest room has owner %d", room.Owner())
+	}
+
+	alice := newClientOn(hub, "alice-tab")
+	alice.userID, alice.username = 7, "alice"
+	if got := join(t, alice, code); got != code {
+		t.Fatalf("signing in mid-run didn't keep the run (got room %s)", got)
+	}
+	if room.Owner() != 7 {
+		t.Errorf("room owner = %d after alice resumed it, want 7", room.Owner())
+	}
+
+	for _, c := range []*Client{newClientOn(hub, "logged-out"), func() *Client {
+		b := newClientOn(hub, "bob-tab")
+		b.userID, b.username = 8, "bob"
+		return b
+	}()} {
+		got := join(t, c, code)
+		defer closeRoom(hub, got)
+		if got == code {
+			t.Errorf("%s resumed alice's room", c.id)
+		}
+	}
+
+	// One live room per account: alice on another tab or device, with no
+	// code, lands in that same game.
+	fresh := newClientOn(hub, "alice-2")
+	fresh.userID = 7
+	if own := join(t, fresh, ""); own != code {
+		t.Errorf("alice's second tab got room %s, want her live room %s", own, code)
+	}
+}
+
+// The join reply names the signed-in player, or null for a guest.
+func TestJoinReplyCarriesUser(t *testing.T) {
+	hub := NewHub(game.NewManager())
+	c := newClientOn(hub, "x")
+	c.userID, c.username = 3, "neo"
+	c.handleMessage(&Message{Type: MessageTypeJoinRoom})
+	reply := nextReply(t, c, MessageTypeJoinRoom)
+	defer closeRoom(hub, reply.Payload["room_code"].(string))
+	if reply.Payload["user"] != "neo" {
+		t.Errorf("user = %v, want neo", reply.Payload["user"])
+	}
+	g := newClientOn(hub, "g")
+	g.handleMessage(&Message{Type: MessageTypeJoinRoom})
+	gr := nextReply(t, g, MessageTypeJoinRoom)
+	defer closeRoom(hub, gr.Payload["room_code"].(string))
+	if v, present := gr.Payload["user"]; !present || v != nil {
+		t.Errorf("guest user = %v (present %v), want null", v, present)
+	}
+}

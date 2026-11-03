@@ -91,6 +91,9 @@ func (gs *GameStateWithShooting) AddTower(x, y float64, towerType string) (Tower
 	gs.Towers = append(gs.Towers, tower)
 	gs.nextTowerID++
 	gs.RecalculateEnemyPaths()
+	if len(gs.Towers) >= fortressTowers {
+		gs.emitLocked(Event{Kind: EventTowerCount, TowerCount: len(gs.Towers)})
+	}
 
 	return tower, nil
 }

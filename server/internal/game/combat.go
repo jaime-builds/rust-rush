@@ -451,12 +451,16 @@ func (gs *GameStateWithShooting) applyChainLightning(proj *Projectile, primary *
 }
 
 func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
+	bossesKilled := 0
 	alive := gs.Enemies[:0] // in-place filter, same pattern as updateProjectiles
 
 	for i := range gs.Enemies {
 		enemy := &gs.Enemies[i]
 
 		if enemy.Health <= 0 {
+			if enemy.EnemyType == "boss" {
+				bossesKilled++
+			}
 			reward := getEnemyGoldReward(enemy.EnemyType)
 			if gs.Difficulty == DifficultyHarder {
 				// −30%, rounded to nearest: 10→7, 8→6, 25→18, 100→70.
@@ -523,10 +527,14 @@ func (gs *GameStateWithShooting) updateEnemies(deltaTime float64) {
 			alive = append(alive, *enemy)
 		} else {
 			gs.Health -= 10
+			gs.tookDamage = true
 		}
 	}
 
 	gs.Enemies = alive
+	if bossesKilled > 0 {
+		gs.emitLocked(Event{Kind: EventBossKilled, Count: bossesKilled})
+	}
 }
 
 func (gs *GameStateWithShooting) updateEffects(deltaTime float64) {

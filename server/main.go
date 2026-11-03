@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"rust-rush/server/internal/accounts"
 	"rust-rush/server/internal/admin"
 	"rust-rush/server/internal/game"
 	"rust-rush/server/internal/stats"
@@ -58,26 +59,66 @@ func main() {
 		statsPath = "stats.db"
 	}
 	var pendingWrites sync.WaitGroup
+	// Accounts (optional player logins, leaderboard, saves, achievements)
+	// share the stats database file, so they exist only when it opens.
+	var accountAPI *accounts.API
 	statsStore, err := stats.Open(statsPath)
 	if err != nil {
 		// Stats are a nice-to-have — the game must not die without them.
-		log.Printf("⚠️ Stats disabled — could not open %s: %v", statsPath, err)
+		log.Printf("⚠️ Stats and accounts disabled — could not open %s: %v", statsPath, err)
 	} else {
 		log.Printf("Stats database: %s", statsPath)
-		gameManager.SetGameOverHook(func(roomID string, wave, score int, duration float64) {
+		if store, err := accounts.Open(statsStore.DB()); err != nil {
+			log.Printf("⚠️ Accounts disabled — %v", err)
+		} else {
+			accountAPI = accounts.NewAPI(store)
+			gameManager.SetSaveStore(store)
+		}
+		gameManager.SetGameOverHook(func(roomID string, r game.RunResult) {
 			pendingWrites.Add(1)
 			defer pendingWrites.Done()
-			rec := stats.GameRecord{EndedAt: time.Now(), Wave: wave, Score: score, Duration: duration}
+			rec := stats.GameRecord{
+				EndedAt: time.Now(), Wave: r.Wave, Score: r.Score, Duration: r.Duration,
+				UserID: r.OwnerID, MapID: r.MapID, Difficulty: r.Difficulty,
+				Endless: r.Endless, Victory: r.Victory,
+			}
+			if r.Victory && r.OwnerID > 0 && accountAPI != nil {
+				if m := game.GetMapDef(r.MapID); m != nil {
+					if err := accountAPI.Store().AdvanceProgress(r.OwnerID, m.SequenceOrder); err != nil {
+						log.Printf("⚠️ Failed to record map progress: %v", err)
+					}
+				}
+			}
 			if err := recordWithRetry(statsStore, rec); err != nil {
 				log.Printf("⚠️ Failed to record game: %v", err)
 			} else {
-				log.Printf("📈 Recorded game: wave=%d score=%d duration=%.0fs", wave, score, duration)
+				log.Printf("📈 Recorded game: wave=%d score=%d duration=%.0fs", r.Wave, r.Score, r.Duration)
 			}
 		})
 	}
 
 	hub := websocket.NewHub(gameManager)
 	go hub.Run()
+	if accountAPI != nil {
+		hub.SetIdentify(func(r *http.Request) (int64, string) {
+			if u, ok := accountAPI.UserFromRequest(r); ok {
+				return u.ID, u.Username
+			}
+			return 0, ""
+		})
+		accountAPI.OnLogout = hub.DisconnectUser
+		// Achievements: rooms report run events; the accounts store awards
+		// what they unlock, and the player's open tabs get a toast.
+		store := accountAPI.Store()
+		gameManager.SetEventHandler(func(userID int64, roomID string, ev game.Event) {
+			for _, a := range store.HandleEvent(userID, ev) {
+				hub.SendToUser(userID, websocket.Message{
+					Type:    websocket.MessageTypeAchievement,
+					Payload: map[string]interface{}{"id": a.ID, "name": a.Name, "description": a.Description},
+				})
+			}
+		})
+	}
 
 	// Single-operator admin login (ADMIN_USERNAME / ADMIN_PASSWORD). Needed
 	// before route setup because it gates /stats and serves the admin pages.
@@ -102,6 +143,19 @@ func main() {
 			w.Header().Set("Cache-Control", "no-store")
 			statsHandler(w, r)
 		}))
+	}
+
+	// Player accounts and the public leaderboard.
+	if accountAPI != nil {
+		accountAPI.Register(mux)
+		mux.HandleFunc("/api/leaderboard", accountAPI.LeaderboardHandler(func(id string) bool {
+			return game.GetMapDef(id) != nil
+		}))
+	}
+
+	// Player moderation for the admin page, behind the admin session.
+	if accountAPI != nil {
+		accountAPI.RegisterAdmin(mux, adminAuth.RequireSession)
 	}
 
 	// Admin auth API. These paths double as client-side routes, so a GET is a
@@ -179,6 +233,10 @@ func main() {
 		log.Printf("HTTP shutdown: %v", err)
 	}
 	hub.CloseAll()
+	// Signed-in players keep their runs across a deploy: save every live
+	// owned room, and wait for the writes before the database closes.
+	gameManager.SaveAll()
+	gameManager.FlushSaves()
 
 	done := make(chan struct{})
 	go func() {

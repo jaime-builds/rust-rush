@@ -14,6 +14,10 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/stats': GO_SERVER,
+      // Player accounts, leaderboard and admin moderation: same-origin
+      // cookie APIs, so they go through the proxy like /stats.
+      '/api': GO_SERVER,
+      '/admin/api': GO_SERVER,
       '/admin/logout': GO_SERVER,
       '/admin/login': {
         target: GO_SERVER,

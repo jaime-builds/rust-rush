@@ -3,8 +3,13 @@ import './App.css'
 import GameCanvas from './game/GameCanvas'
 import ErrorBoundary from './ui/ErrorBoundary'
 import SettingsMenu from './ui/SettingsMenu'
+import AccountDialog from './ui/AccountDialog'
+import LeaderboardDialog from './ui/LeaderboardDialog'
+import AchievementsDialog from './ui/AchievementsDialog'
+import { Account, fetchMe } from './account/api'
+import { readFurthestBeaten } from './game/progress'
 import { useWebSocket } from './hooks/useWebSocket'
-import { Difficulty, GameState, newPlacementCheckStore } from './types/game'
+import { Difficulty, GameState, SaveSummary, newPlacementCheckStore } from './types/game'
 import { sound } from './audio/sound'
 import { RESET_GUARD_MS, isFreshRun, readRoomCode, writeRoomCode } from './session'
 
@@ -41,7 +46,20 @@ const defaultGameState: GameState = {
 }
 
 function App() {
-  const { status, subscribe, sendMessage, reconnectNow } = useWebSocket(WS_URL)
+  const { status, subscribe, sendMessage, reconnectNow, restart } = useWebSocket(WS_URL)
+  // Optional player account (null = guest). Loaded once; sign-in and
+  // sign-out restart the socket so the server sees the new identity.
+  const [account, setAccount] = useState<Account | null>(null)
+  const [showAccount, setShowAccount] = useState(false)
+  const [showLeaderboard, setShowLeaderboard] = useState(false)
+  const [showAchievements, setShowAchievements] = useState(false)
+  // Unlock toasts from the server, each shown for a few seconds.
+  const [toasts, setToasts] = useState<{ key: number; name: string; description: string }[]>([])
+  const toastKeyRef = useRef(0)
+  // The account's autosaved run (from the join reply), offered as Continue
+  // on the map screen; loadError explains a refused load.
+  const [savedRun, setSavedRun] = useState<SaveSummary | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [hasJoined, setHasJoined] = useState(false)
   // The server says (in the join reply) whether debug spawns are enabled;
   // the DEBUG button only exists when they are.
@@ -83,6 +101,26 @@ function App() {
       window.removeEventListener('keydown', unlock)
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchMe().then(a => { if (!cancelled) setAccount(a) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const handleSignedIn = useCallback((a: Account) => {
+    setAccount(a)
+    restart()
+  }, [restart])
+
+  const handleSignedOut = useCallback(() => {
+    setAccount(null)
+    restart()
+  }, [restart])
+
+  const closeAccount = useCallback(() => setShowAccount(false), [])
+  const closeLeaderboard = useCallback(() => setShowLeaderboard(false), [])
+  const closeAchievements = useCallback(() => setShowAchievements(false), [])
 
   // Join on every new connection (connectionId bumps per connect): the
   // server forgets a socket's room the moment it drops, so a reconnect must
@@ -142,6 +180,8 @@ function App() {
           return
         }
         if (typeof p.room_code === 'string') writeRoomCode(p.room_code)
+        setSavedRun((p.save as SaveSummary | null | undefined) ?? null)
+        setLoadError(null)
         setDebugAllowed(p.debug_spawn === true)
         setJoinError(null)
         setHasJoined(true)
@@ -150,6 +190,29 @@ function App() {
           liveStateRef.current = p.state
           lastExplosionIdRef.current = 0
           commitNow()
+        }
+        return
+      }
+
+      if (message.type === 'achievement') {
+        const { name, description } = (message.payload ?? {}) as { name?: string; description?: string }
+        if (typeof name !== 'string') return
+        const key = ++toastKeyRef.current
+        setToasts(t => [...t, { key, name, description: description ?? '' }])
+        sound.evolveConfirm()
+        setTimeout(() => setToasts(t => t.filter(x => x.key !== key)), 5000)
+        return
+      }
+
+      if (message.type === 'load_save') {
+        const status = message.payload?.status
+        if (status === 'loaded') {
+          setSavedRun(null)
+          setLoadError(null)
+        } else {
+          setLoadError(status === 'not_fresh'
+            ? 'A saved run can only be continued on a fresh board. Start a new game first.'
+            : status === 'no_save' ? 'That save is gone.' : 'The save could not be loaded.')
         }
         return
       }
@@ -295,6 +358,12 @@ function App() {
     setGameState(defaultGameState)
   }, [hasJoined, sendMessage])
 
+  const handleLoadSave = useCallback(() => {
+    if (!hasJoined) return
+    setLoadError(null)
+    sendMessage({ type: 'load_save' })
+  }, [hasJoined, sendMessage])
+
   // Victory screen: continue the same run past the win wave in Endless.
   // No local state reset — the run carries on from exactly where it is.
   const handleContinueEndless = useCallback(() => {
@@ -389,6 +458,27 @@ function App() {
           >
             ⚙ SETTINGS
           </button>
+          <button
+            className="btn btn-inline"
+            onClick={() => setShowLeaderboard(true)}
+            title="Top players per zone"
+          >
+            LEADERBOARD
+          </button>
+          <button
+            className="btn btn-inline"
+            onClick={() => setShowAchievements(true)}
+            title="Your achievements"
+          >
+            ACHIEVEMENTS
+          </button>
+          <button
+            className={`btn btn-inline ${account ? 'btn-toggled' : ''}`}
+            onClick={() => setShowAccount(true)}
+            title={account ? 'Your account' : 'Sign in or create an account (optional)'}
+          >
+            {account ? `◆ ${account.username}` : 'SIGN IN'}
+          </button>
         </div>
 
         {showDebug && debugAllowed && (
@@ -450,6 +540,48 @@ function App() {
         )}
       </header>
 
+      {showAccount && (
+        <ErrorBoundary section="ACCOUNT">
+          <AccountDialog
+            account={account}
+            localFurthest={readFurthestBeaten()}
+            onClose={closeAccount}
+            onSignedIn={handleSignedIn}
+            onSignedOut={handleSignedOut}
+          />
+        </ErrorBoundary>
+      )}
+
+      {showAchievements && (
+        <ErrorBoundary section="ACHIEVEMENTS">
+          <AchievementsDialog onClose={closeAchievements} />
+        </ErrorBoundary>
+      )}
+
+      {toasts.length > 0 && (
+        <div className="achievement-toasts" role="status" aria-live="polite">
+          {toasts.map(t => (
+            <div key={t.key} className="achievement-toast">
+              <div className="achievement-toast-title">ACHIEVEMENT UNLOCKED</div>
+              <div className="achievement-toast-name">{t.name}</div>
+              <div className="achievement-toast-desc">{t.description}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showLeaderboard && (
+        <ErrorBoundary section="LEADERBOARD">
+          <LeaderboardDialog
+            initialMap={gameState.map_id ?? 'open'}
+            initialDifficulty={gameState.difficulty === 'harder' ? 'harder' : 'normal'}
+            signedIn={account !== null}
+            username={account?.username ?? null}
+            onClose={closeLeaderboard}
+          />
+        </ErrorBoundary>
+      )}
+
       {showSettings && (
         <ErrorBoundary section="SETTINGS">
           <SettingsMenu onClose={closeSettings} />
@@ -473,6 +605,10 @@ function App() {
           onCheckPlacement={handleCheckPlacement}
           placementChecksRef={placementChecksRef}
           showDebug={showDebug && debugAllowed}
+          accountFurthest={account?.furthest_beaten ?? 0}
+          savedRun={savedRun}
+          loadError={loadError}
+          onLoadSave={handleLoadSave}
           />
         </ErrorBoundary>
       </main>

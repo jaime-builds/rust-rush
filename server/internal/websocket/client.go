@@ -88,6 +88,11 @@ type Client struct {
 	// roomID is the room the server assigned; guarded by hub.mu (use
 	// hub.roomOf to read it from handlers).
 	roomID string
+	// userID and username identify a signed-in player (0, "" = guest),
+	// read from the session cookie at the handshake and fixed for the life
+	// of the connection: logging in or out reconnects.
+	userID   int64
+	username string
 	// ip and reserved: the connection slot taken in hub.reserve, released
 	// on unregister.
 	ip       string
@@ -316,6 +321,22 @@ func (c *Client) handleMessage(msg *Message) {
 		}
 		go c.hub.gameManager.SpawnWave(roomID)
 
+	case MessageTypeLoadSave:
+		err := c.hub.gameManager.LoadSave(roomID, c.userID)
+		status := "loaded"
+		switch {
+		case err == nil:
+			c.hub.BroadcastGameState(roomID)
+		case errors.Is(err, game.ErrNoSave):
+			status = "no_save"
+		case errors.Is(err, game.ErrRoomNotNew):
+			status = "not_fresh"
+		default:
+			status = "failed"
+			log.Printf("Client %s load_save: %v", c.id, err)
+		}
+		c.reply(MessageTypeLoadSave, map[string]interface{}{"status": status})
+
 	case MessageTypeNewGame:
 		// Optional fields: map_id selects the map (unknown/missing keeps the
 		// room's current map), difficulty ("normal"|"harder") and endless
@@ -323,6 +344,10 @@ func (c *Client) handleMessage(msg *Message) {
 		difficulty, _ := msg.Payload["difficulty"].(string)
 		endless, _ := msg.Payload["endless"].(bool)
 		mapID, _ := msg.Payload["map_id"].(string)
+		// A fresh run replaces the account's saved one.
+		if owner := room.Owner(); owner != 0 {
+			c.hub.gameManager.DiscardSave(owner)
+		}
 		if !room.ResetToMapWithOptions(mapID, difficulty, endless) && mapID != "" {
 			log.Printf("Unknown map_id %q from client %s — kept current map", mapID, c.id)
 		}
@@ -349,12 +374,31 @@ func (c *Client) handleMessage(msg *Message) {
 // a client can't name a room, only resume one with the code the server gave
 // it at its last join (kept by that browser tab). An unknown or expired code
 // silently gets a fresh room.
+//
+// Ownership: a room created by a signed-in player belongs to that account,
+// and an account has one live room: every tab and device it opens joins
+// that same game. A guest room resumed by a signed-in player is claimed by
+// them (logging in mid-run keeps the run) unless they already have a live
+// room. A room owned by an account can only be resumed by that account, so
+// logging out (or a shared code) never hands someone else's run over.
 func (c *Client) handleJoin(msg *Message) {
 	manager := c.hub.gameManager
 
 	var room *game.GameStateWithShooting
 	if code, _ := msg.Payload["resume"].(string); code != "" {
-		room, _ = manager.GetShootingRoom(code)
+		if r, ok := manager.GetShootingRoom(code); ok {
+			switch owner := r.Owner(); {
+			case owner == c.userID:
+				room = r
+			case owner == 0 && c.userID != 0:
+				room = manager.ClaimRoom(r, c.userID)
+			}
+		}
+	}
+	if room == nil && c.userID != 0 {
+		if r, ok := manager.RoomOfUser(c.userID); ok {
+			room = r
+		}
 	}
 	if room == nil {
 		// Already in a room (a repeat join from the same connection): stay.
@@ -369,7 +413,10 @@ func (c *Client) handleJoin(msg *Message) {
 			c.reply(MessageTypeJoinRoom, map[string]interface{}{"status": "server_full"})
 			return
 		}
-		room = created
+		room = manager.ClaimRoom(created, c.userID)
+		if room != created {
+			manager.DeleteRoom(created.RoomID) // lost a race to another tab
+		}
 	}
 
 	roomID := room.RoomID
@@ -386,9 +433,32 @@ func (c *Client) handleJoin(msg *Message) {
 			"clientId":    c.id,
 			"room_code":   roomID,
 			"debug_spawn": debugSpawnEnabled,
+			"user":        c.usernameOrNil(),
+			"save":        c.saveSummaryOrNil(),
 			"state":       room.GetSnapshot(),
 		},
 	})
+}
+
+// saveSummaryOrNil is the join reply's "save" field: the signed-in
+// player's saved run (map, wave, when), or null.
+func (c *Client) saveSummaryOrNil() interface{} {
+	if c.userID == 0 {
+		return nil
+	}
+	if s, ok := c.hub.gameManager.SavedRunSummary(c.userID); ok {
+		return s
+	}
+	return nil
+}
+
+// usernameOrNil is the join reply's "user" field: the signed-in name, or
+// JSON null for a guest.
+func (c *Client) usernameOrNil() interface{} {
+	if c.userID == 0 {
+		return nil
+	}
+	return c.username
 }
 
 // sendJSON sends a reply to this client. Replies may use the whole buffer;
@@ -483,11 +553,14 @@ func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID, username := hub.whoIs(r)
 	client := &Client{
 		hub:      hub,
 		conn:     conn,
 		send:     make(chan []byte, sendBuffer),
 		id:       generateClientID(),
+		userID:   userID,
+		username: username,
 		ip:       ip,
 		reserved: true,
 	}

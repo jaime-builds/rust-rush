@@ -33,7 +33,7 @@ func TestVictoryFiresOnceAtWinWave(t *testing.T) {
 	fired := make(chan int, 8)
 	gs.mu.Lock()
 	gs.Wave = 24 // clearing this wave takes the counter to 25 = WinWave
-	gs.OnGameOver = func(wave, score int, duration float64) { fired <- wave }
+	gs.OnGameOver = func(r RunResult) { fired <- r.Wave }
 	gs.mu.Unlock()
 
 	leakOneEnemyThroughWave(t, gs)
@@ -102,7 +102,7 @@ func TestContinueEndlessFromVictory(t *testing.T) {
 	gs.mu.Lock()
 	gs.Wave = 24
 	gs.Gold = 777
-	gs.OnGameOver = func(wave, score int, duration float64) { fired <- struct{}{} }
+	gs.OnGameOver = func(RunResult) { fired <- struct{}{} }
 	gs.mu.Unlock()
 
 	leakOneEnemyThroughWave(t, gs)
@@ -169,7 +169,7 @@ func TestResetRearmsVictory(t *testing.T) {
 	gs.Reset()
 	gs.mu.Lock()
 	gs.Wave = 24
-	gs.OnGameOver = func(wave, score int, duration float64) { fired <- struct{}{} }
+	gs.OnGameOver = func(RunResult) { fired <- struct{}{} }
 	if gs.Endless {
 		t.Error("Endless survived a reset")
 	}

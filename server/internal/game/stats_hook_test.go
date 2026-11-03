@@ -21,8 +21,13 @@ func TestOnGameOverFiresOnce(t *testing.T) {
 	gs.Health = 10
 	gs.Wave = 7
 	gs.Score = 3131
-	gs.OnGameOver = func(wave, score int, duration float64) {
-		fired <- record{wave, score, duration}
+	gs.OwnerID = 42
+	wantMap := gs.MapID // read under the lock; the hook runs on its own goroutine
+	gs.OnGameOver = func(r RunResult) {
+		if r.OwnerID != 42 || r.Victory || r.MapID != wantMap {
+			t.Errorf("run result details wrong: %+v", r)
+		}
+		fired <- record{r.Wave, r.Score, r.Duration}
 	}
 	gs.mu.Unlock()
 
@@ -65,7 +70,7 @@ func TestOnGameOverFiresOnce(t *testing.T) {
 func TestManagerGameOverHookWiring(t *testing.T) {
 	m := NewManager()
 	fired := make(chan string, 1)
-	m.SetGameOverHook(func(roomID string, wave, score int, duration float64) {
+	m.SetGameOverHook(func(roomID string, r RunResult) {
 		fired <- roomID
 	})
 
@@ -77,7 +82,7 @@ func TestManagerGameOverHookWiring(t *testing.T) {
 		t.Fatal("room created after SetGameOverHook has no OnGameOver")
 	}
 
-	room.OnGameOver(3, 100, 42.0)
+	room.OnGameOver(RunResult{Wave: 3, Score: 100, Duration: 42.0})
 	select {
 	case roomID := <-fired:
 		if roomID != "hook-room" {

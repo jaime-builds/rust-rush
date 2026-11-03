@@ -3,6 +3,7 @@ package websocket
 import (
 	"encoding/json"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
@@ -33,6 +34,9 @@ const (
 	// the placement ghost can warn before the click. Advisory: AddTower
 	// re-checks and is the actual gate.
 	MessageTypeCheckPlacement = "check_placement"
+	// load_save: continue the signed-in player's saved run in this (fresh)
+	// room. Replies with the outcome; the state follows as usual.
+	MessageTypeLoadSave = "load_save"
 )
 
 // Connection limits (Jaime's defaults, 2026-11-03).
@@ -66,6 +70,38 @@ type Hub struct {
 	register    chan *Client
 	unregister  chan *Client
 	gameManager *game.Manager
+	// identify resolves a WebSocket handshake to an account (0, "" for a
+	// guest). Set by main when accounts are enabled.
+	identify func(r *http.Request) (userID int64, username string)
+}
+
+// SetIdentify installs the account lookup used at each handshake.
+func (h *Hub) SetIdentify(f func(r *http.Request) (int64, string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.identify = f
+}
+
+func (h *Hub) whoIs(r *http.Request) (int64, string) {
+	h.mu.RLock()
+	f := h.identify
+	h.mu.RUnlock()
+	if f == nil {
+		return 0, ""
+	}
+	return f(r)
+}
+
+// DisconnectUser closes every open connection of an account (it was
+// deleted). The tabs reconnect as guests.
+func (h *Hub) DisconnectUser(userID int64) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for client := range h.clients {
+		if client.userID == userID && client.conn != nil {
+			client.conn.Close()
+		}
+	}
 }
 
 // NewHub creates a Hub and makes it the game manager's snapshot sink.
@@ -269,5 +305,20 @@ func (h *Hub) CloseAll() {
 		}
 		client.conn.WriteControl(websocket.CloseMessage, msg, deadline)
 		client.conn.Close()
+	}
+}
+
+// MessageTypeAchievement tells a signed-in player's open tabs that an
+// achievement just unlocked (payload: id, name, description).
+const MessageTypeAchievement = "achievement"
+
+// SendToUser sends a message to every open connection of an account.
+func (h *Hub) SendToUser(userID int64, msg Message) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for client := range h.clients {
+		if client.userID == userID {
+			client.sendJSON(msg)
+		}
 	}
 }

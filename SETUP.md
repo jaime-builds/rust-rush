@@ -5,7 +5,7 @@ The live game is two components: a **Go server** (all game logic, WebSocket, sta
 ## 📋 Prerequisites
 
 - **Go** 1.25+ → [go.dev/dl](https://go.dev/dl/) (`server/go.mod` requires 1.25)
-- **Node.js** 22.12+ → [nodejs.org](https://nodejs.org/) (Vite 6 and Vitest 4 need it)
+- **Node.js** 22.13+ → [nodejs.org](https://nodejs.org/) (ESLint 10, Vite 6 and Vitest 4 need it)
 
 Verify installations:
 ```bash
@@ -139,6 +139,7 @@ rust-rush/
 │   ├── httpserver.go     # Security headers, static files, 404 page
 │   ├── e2e_test.go       # End-to-end WebSocket game flow test
 │   └── internal/
+│       ├── accounts/     # Player accounts, leaderboard, saves, achievements, moderation
 │       ├── admin/        # Single-operator login + session gate for /stats
 │       ├── game/         # Game state, waves, pathfinding, room lifecycle and loop
 │       ├── netutil/      # Visitor IP behind Cloudflare, token bucket
@@ -153,7 +154,8 @@ rust-rush/
         ├── audio/
         │   └── sound.ts  # Procedural Web Audio engine (music + SFX)
         ├── game/
-        │   └── GameCanvas.tsx  # Canvas rendering + game UI
+        │   ├── GameCanvas.tsx  # Render loop, input, game UI
+        │   └── draw.ts         # Canvas drawing functions (plus theme, shapes, icons)
         ├── hooks/
         │   └── useWebSocket.ts # Connection + subscription hook
         ├── types/
@@ -163,6 +165,10 @@ rust-rush/
             ├── AdminApp.tsx      # /admin router + login/stats pages
             ├── AdminLogin.tsx    # Admin login form
             ├── AdminStats.tsx    # Private stats dashboard
+            ├── AdminPlayers.tsx  # Player moderation on the stats page
+            ├── AccountDialog.tsx # Optional player account
+            ├── LeaderboardDialog.tsx  # Public top 10 per zone
+            ├── AchievementsDialog.tsx # The 12 achievements
             ├── Dialog.tsx        # Modal shell: focus, Tab trap, Escape
             ├── ErrorBoundary.tsx # Inline fault panel instead of a blank page
             └── SettingsMenu.tsx  # Settings modal (3 effect toggles + sound)

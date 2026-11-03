@@ -1,6 +1,7 @@
 // Package stats persists one row per completed game to SQLite and serves the
-// private /stats JSON endpoint. No accounts, no player names — there is no
-// identity anywhere in the schema.
+// private /stats JSON endpoint. A row carries an account ID only when a
+// signed-in player finished the run (that is what the public leaderboard
+// reads); the stats endpoint itself never exposes it.
 //
 // The driver is modernc.org/sqlite (pure Go, no cgo): this dev machine has no
 // C toolchain, and a cgo driver (mattn/go-sqlite3) would not even build here.
@@ -26,6 +27,13 @@ type GameRecord struct {
 	Wave     int       `json:"wave"`
 	Score    int       `json:"score"`
 	Duration float64   `json:"duration_seconds"`
+	// Run details (since Nov 3, 2026; older rows have defaults). UserID is 0
+	// for guests. Not part of the /stats JSON.
+	UserID     int64  `json:"-"`
+	MapID      string `json:"-"`
+	Difficulty string `json:"-"`
+	Endless    bool   `json:"-"`
+	Victory    bool   `json:"-"`
 }
 
 // WaveCount is one entry of the wave-reached distribution.
@@ -50,7 +58,7 @@ func Open(path string) (*Store, error) {
 	}
 	// busy_timeout: a concurrent write (game over in another room) waits
 	// briefly instead of failing with SQLITE_BUSY.
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
@@ -67,8 +75,55 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migrateGames(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
+
+// migrateGames adds the run-detail columns to a games table created before
+// accounts existed. Each ALTER runs only if its column is missing, so this is
+// safe on every start.
+func migrateGames(db *sql.DB) error {
+	have := map[string]bool{}
+	rows, err := db.Query(`PRAGMA table_info(games)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		have[name] = true
+	}
+	rows.Close()
+	add := []struct{ name, def string }{
+		{"user_id", "INTEGER"},
+		{"map_id", "TEXT NOT NULL DEFAULT ''"},
+		{"difficulty", "TEXT NOT NULL DEFAULT 'normal'"},
+		{"endless", "INTEGER NOT NULL DEFAULT 0"},
+		{"victory", "INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, c := range add {
+		if have[c.name] {
+			continue
+		}
+		if _, err := db.Exec(`ALTER TABLE games ADD COLUMN ` + c.name + " " + c.def); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_games_board ON games(map_id, difficulty, user_id, score DESC)`)
+	return err
+}
+
+// DB exposes the database so the accounts store can keep its tables in the
+// same file (one volume, one backup).
+func (s *Store) DB() *sql.DB { return s.db }
 
 func (s *Store) Close() error {
 	return s.db.Close()
@@ -76,9 +131,19 @@ func (s *Store) Close() error {
 
 // RecordGame inserts one completed game.
 func (s *Store) RecordGame(r GameRecord) error {
+	var user any
+	if r.UserID > 0 {
+		user = r.UserID
+	}
+	difficulty := r.Difficulty
+	if difficulty == "" {
+		difficulty = "normal"
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO games (ended_at, wave, score, duration_seconds) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO games (ended_at, wave, score, duration_seconds, user_id, map_id, difficulty, endless, victory)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.EndedAt.UTC().Format(time.RFC3339), r.Wave, r.Score, r.Duration,
+		user, r.MapID, difficulty, r.Endless, r.Victory,
 	)
 	return err
 }

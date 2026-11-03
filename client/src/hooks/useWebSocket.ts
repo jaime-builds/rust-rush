@@ -15,6 +15,8 @@ export type MessageType =
   | 'new_game'
   | 'continue_endless' // victory screen: keep the run going past the win wave
   | 'check_placement' // hover preview: would a tower here seal the lane?
+  | 'load_save' // continue the signed-in player's saved run (fresh board only)
+  | 'achievement' // server to client: an achievement just unlocked
 
 export interface WebSocketMessage {
   type: MessageType
@@ -136,6 +138,16 @@ export const useWebSocket = (url: string) => {
     }
   }, [])
 
+  // restart drops the current socket and opens a fresh one right away. The
+  // server reads the account from the session cookie at the handshake, so
+  // signing in or out restarts the connection to change who we are.
+  const restart = useCallback(() => {
+    disconnect()
+    reconnectAttemptsRef.current = 0
+    setStatus(s => ({ ...s, isConnected: false }))
+    connect()
+  }, [connect, disconnect])
+
   // reconnectNow skips the backoff wait (the Reconnect button).
   const reconnectNow = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return
@@ -173,5 +185,6 @@ export const useWebSocket = (url: string) => {
     subscribe,
     sendMessage,
     reconnectNow,
+    restart,
   }
 }

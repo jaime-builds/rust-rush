@@ -211,7 +211,7 @@
   - [x] SQLite file next to the server, one row per completed game (timestamp, wave reached, final score, duration), written on the `game_over` phase transition — pure-Go driver (`modernc.org/sqlite`), path via `STATS_DB`
   - [x] Concurrent player count from the existing hub client map (no new tracking needed)
   - [x] Internal `/stats` JSON endpoint (not linked publicly) — concurrent players, total games, wave distribution, top 10 scores
-  - [ ] Small internal stats UI — later phase, not scoped yet
+  - [x] Small internal stats UI ✅ (Aug 5, 2026 — the admin stats page; this line was stale until Nov 3)
 - [x] Share public link — live at `https://rust-rush.jaime.build`
 
 ### Phase 24: Advanced Features
@@ -248,10 +248,10 @@ Deprioritized July 16, 2026 — moved out of the active roadmap so Phases 19/20/
 - [ ] Chat system
 
 ### Persistence & Progression (was Phase 23)
-- [ ] User accounts
-- [ ] High score leaderboard
-- [ ] Achievements system
-- [ ] Save/load game state
+- [x] User accounts ✅ (Nov 3, 2026 — optional, username + password with Argon2id, cookie sessions, change password, delete account)
+- [x] High score leaderboard ✅ (Nov 3, 2026 — public, top 10 per zone, Normal and Harder separate, signed-in runs only)
+- [x] Achievements system ✅ (Nov 3, 2026 — 12, awarded by the server, unlock toast, progress counters)
+- [x] Save/load game state ✅ (Nov 3, 2026 — one autosave per account at wave breaks, room close and shutdown; Continue resumes paused, mid-wave included)
 
 ### Map Editor & Custom Maps (was part of Phase 24)
 - [ ] Map editor
@@ -373,7 +373,7 @@ Deprioritized July 16, 2026 — moved out of the active roadmap so Phases 19/20/
 
 ### Known Issues to Address Next
 - ~~No tower upgrade UI for special stats~~ ✅ (Nov 3, 2026 — the panel shows slow, blast, chain and volley stats, plus a NEXT line previewing the upgrade, both server-sent)
-- No sound
+- ~~No sound~~ ✅ (shipped July 14–15; this line was stale until Nov 3)
 
 ---
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,13 +38,24 @@ type Manager struct {
 	shootingRooms map[string]*GameStateWithShooting
 	mu            sync.RWMutex
 	// onGameOver is copied onto every room at creation (see SetGameOverHook).
-	onGameOver func(roomID string, wave, score int, duration float64)
+	onGameOver func(roomID string, r RunResult)
 	// sink receives each room's marshalled snapshot once per tick, called
 	// directly from that room's loop goroutine. Rooms no longer share one
 	// broadcast channel, so a busy room can't make the others drop frames.
 	sink      func(roomID string, snapshot []byte)
 	maxRooms  int
 	idleGrace time.Duration
+	// userRooms maps a signed-in account to its one live room: every tab
+	// and device of that account joins the same game, so a run can't be
+	// duplicated (and a save can't be loaded twice).
+	userRooms map[int64]string
+	// saves is read lock-free: rooms queue saves while holding their own
+	// lock, and taking m.mu there could deadlock against ClaimRoom (which
+	// holds m.mu and then takes a room lock).
+	saves atomic.Pointer[saver]
+	// events delivers run events (achievements); lock-free for the same
+	// reason as saves.
+	events atomic.Pointer[eventSink]
 }
 
 // NewManager creates a game manager with the default limits.
@@ -52,7 +64,39 @@ func NewManager() *Manager {
 		shootingRooms: make(map[string]*GameStateWithShooting),
 		maxRooms:      DefaultMaxRooms,
 		idleGrace:     DefaultRoomIdleGrace,
+		userRooms:     make(map[int64]string),
 	}
+}
+
+// ClaimRoom makes room the account's live room and returns the room the
+// account should be in: its existing live room if it already has one (the
+// claim then does nothing), otherwise room itself, now owned by it.
+func (m *Manager) ClaimRoom(room *GameStateWithShooting, userID int64) *GameStateWithShooting {
+	if userID == 0 {
+		return room
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if id, ok := m.userRooms[userID]; ok && id != room.RoomID {
+		if existing := m.shootingRooms[id]; existing != nil {
+			return existing
+		}
+	}
+	room.SetOwner(userID)
+	m.userRooms[userID] = room.RoomID
+	return room
+}
+
+// RoomOfUser returns the account's live room, if any.
+func (m *Manager) RoomOfUser(userID int64) (*GameStateWithShooting, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id, ok := m.userRooms[userID]
+	if !ok {
+		return nil, false
+	}
+	room := m.shootingRooms[id]
+	return room, room != nil
 }
 
 // SetLimits overrides the room cap and idle grace period (tests use short
@@ -122,11 +166,10 @@ func (m *Manager) newRoomLocked(roomID string) *GameStateWithShooting {
 	room := NewGameStateWithShooting(roomID)
 	if m.onGameOver != nil {
 		hook := m.onGameOver
-		room.OnGameOver = func(wave, score int, duration float64) {
-			hook(roomID, wave, score, duration)
-		}
+		room.OnGameOver = func(r RunResult) { hook(roomID, r) }
 	}
 	room.emptySince = time.Now()
+	room.mgr = m
 	m.shootingRooms[roomID] = room
 	return room
 }
@@ -134,7 +177,7 @@ func (m *Manager) newRoomLocked(roomID string) *GameStateWithShooting {
 // SetGameOverHook installs a callback fired once per completed game in any
 // room (used by main to persist stats). Call before serving traffic — rooms
 // created earlier won't have it.
-func (m *Manager) SetGameOverHook(hook func(roomID string, wave, score int, duration float64)) {
+func (m *Manager) SetGameOverHook(hook func(roomID string, r RunResult)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onGameOver = hook
@@ -199,10 +242,21 @@ func (m *Manager) RemovePlayer(roomID, playerID string) {
 
 // DeleteRoom removes a room and cancels its spawner. Its game loop notices on
 // the next tick and exits.
+// A signed-in player's unfinished run is saved first, mid-wave included.
 func (m *Manager) DeleteRoom(roomID string) {
-	m.mu.Lock()
+	m.mu.RLock()
 	room, exists := m.shootingRooms[roomID]
+	m.mu.RUnlock()
+	if exists {
+		room.checkpoint()
+	}
+	m.mu.Lock()
 	delete(m.shootingRooms, roomID)
+	for user, id := range m.userRooms {
+		if id == roomID {
+			delete(m.userRooms, user)
+		}
+	}
 	m.mu.Unlock()
 	if exists {
 		room.cancelSpawns()
@@ -327,6 +381,14 @@ func (m *Manager) SpawnWave(roomID string) {
 		log.Printf("Wave not started in room %s — game not in waiting phase", shortID(roomID))
 		return
 	}
+	m.runSpawner(room, waveNum, config, cancel, 0)
+}
+
+// runSpawner feeds a wave's enemies into the room with their delays. skip
+// is how many were already spawned (a wave resumed from a save): those are
+// passed over with no delay.
+func (m *Manager) runSpawner(room *GameStateWithShooting, waveNum int, config WaveConfig, cancel <-chan struct{}, skip int) {
+	index := 0
 
 	// No early bail when the path is blocked at wave start: each spawn
 	// re-checks and skips blocked spawns while still decrementing the
@@ -334,6 +396,10 @@ func (m *Manager) SpawnWave(roomID string) {
 	// soft-locking the game in the active phase.
 	for _, group := range config.Enemies {
 		for i := 0; i < group.Count; i++ {
+			index++
+			if index <= skip {
+				continue
+			}
 			select {
 			case <-cancel:
 				return
