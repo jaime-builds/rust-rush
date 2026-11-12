@@ -4,7 +4,7 @@ The live game is two components: a **Go server** (all game logic, WebSocket, sta
 
 ## 📋 Prerequisites
 
-- **Go** 1.25+ → [go.dev/dl](https://go.dev/dl/) (`server/go.mod` requires 1.25)
+- **Go** 1.27+ → [go.dev/dl](https://go.dev/dl/) (`server/go.mod` requires 1.27)
 - **Node.js** 22.13+ → [nodejs.org](https://nodejs.org/) (ESLint 10, Vite 6 and Vitest 4 need it)
 
 Verify installations:

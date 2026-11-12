@@ -3,7 +3,7 @@
 A high-performance tower defense game built with Go, React, and WebSockets.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Go](https://img.shields.io/badge/go-1.25+-00ADD8.svg)
+![Go](https://img.shields.io/badge/go-1.27+-00ADD8.svg)
 ![React](https://img.shields.io/badge/react-18+-61DAFB.svg)
 ![TypeScript](https://img.shields.io/badge/typescript-5.0+-3178C6.svg)
 
@@ -244,7 +244,7 @@ so back up that one file.
 ## 🚀 Getting Started
 
 ### Prerequisites
-- **Go** (1.25+, the version `server/go.mod` requires): https://go.dev/dl/
+- **Go** (1.27+, the version `server/go.mod` requires): https://go.dev/dl/
 - **Node.js** (18+): https://nodejs.org
 
 ### Quick Start (production — one terminal)
@@ -346,7 +346,7 @@ Client starts on `http://localhost:5173` with hot reload
 - Vite for development
 
 ### Backend
-- Go 1.25+ for game server
+- Go 1.27+ for game server
 - Gorilla WebSocket
 - Server-side 60 FPS game loop
 - One private room per visitor, assigned by the server (a refresh or short drop resumes it for 60 s)

@@ -44,7 +44,7 @@ COPY client/ ./
 RUN npm run build
 
 # --- Stage 2: server ---------------------------------------------------------
-FROM golang:1.25-alpine AS server
+FROM golang:1.27.4-alpine3.24 AS server
 WORKDIR /build/server
 COPY server/go.mod server/go.sum ./
 RUN go mod download
@@ -54,10 +54,17 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /rust-rush .
 
 # --- Stage 3: runtime --------------------------------------------------------
 # Alpine 3.24 is in its support window (3.20 stopped getting fixes in April
-# 2026). The server runs as uid 99 / gid 100, Unraid's usual nobody:users,
-# not root. The /data bind mount on the host must be owned by 99:100 too,
-# or the stats database can't be written (see README.md, Docker note).
-FROM alpine:3.24
+# 2026). Pinned to the point release so a rebuild can't silently reuse an
+# older cached 3.24 base. The server runs as uid 99 / gid 100, Unraid's usual
+# nobody:users, not root. The /data bind mount on the host must be owned by
+# 99:100 too, or the stats database can't be written (see README.md, Docker
+# note).
+FROM alpine:3.24.4
+# Point releases lag the package repo: 3.24.4 still ships zlib 1.3.2-r1, and
+# the fix (1.4-r0) is only in the v3.24 repo. Upgrade the base packages at
+# build time so security fixes land without waiting for the next tag. Docker
+# caches this layer, so rebuild with --pull --no-cache to pick up new fixes.
+RUN apk upgrade --no-cache
 WORKDIR /app
 COPY --from=server /rust-rush ./rust-rush
 COPY --from=client /build/client/dist ./client/dist
