@@ -295,6 +295,7 @@ Deprioritized July 16, 2026 — moved out of the active roadmap so Phases 19/20/
 - [x] Connection recovery on network loss ✅ (Nov 3, 2026 — the client retries forever, rejoins on every reconnect, shows OFFLINE with a Reconnect button)
 - [x] State synchronization on reconnect ✅ (Nov 3, 2026 — the tab keeps its room code and resumes the room within the 60 s grace period)
 - [ ] Single-source gameplay constants (tower costs/ranges, enemy glossary are hand-mirrored in the client — consider a server-sent config on join). Partly done Nov 3, 2026: sell, upgrade and evolve prices now come from the server on each tower; buy prices, ranges and glossaries are still mirrored.
+- [x] Image vulnerability fix ✅ (Nov 12, 2026 — Grype found Critical/High issues in the Go 1.25 stdlib and Alpine zlib; Go 1.27.4, `alpine:3.24.4` + `apk upgrade`, x/crypto v0.59.0. Grype `--only-fixed` clean. See SESSION-LOG.md)
 - [x] Delete `game-engine/` (legacy Rust prototype with diverged stats) and `database/` (unused schema) ✅ (July 16 overnight — both fully deleted, doc references in README/SETUP removed; left unstaged for review)
 
 ---

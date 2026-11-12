@@ -183,3 +183,90 @@ Go — `internal/websocket` (new file `placement_check_test.go`):
 Map/difficulty/enemy/sound/evolution/scoring logic, and the `updateEnemies`
 trapped-enemy idle/resume behavior. No git operations — working tree left for
 review.
+
+---
+
+## November 11–12, 2026 — Docker image vulnerability fix (Go 1.27.4, Alpine zlib)
+
+### The trigger
+
+A Grype scan on 2026-11-11 of the running image on NinjaUnraid
+(`rust-rush:latest`) found fixable issues:
+
+- Go standard library, built with go1.25.14: 1 Critical, 7 High, 1 Medium.
+  No fix on the 1.25 line; fixed in 1.26.10+ or 1.27.3+.
+- Alpine zlib 1.3.2-r1 (Critical), fixed in 1.4-r0.
+
+### What changed (`8a61f35`)
+
+| Item | Old → New |
+|---|---|
+| `go.mod` `go` line | 1.25.0 → 1.27.0 |
+| `go.mod` `toolchain` line | none → go1.27.4 |
+| Build image | `golang:1.25-alpine` → `golang:1.27.4-alpine3.24` |
+| Runtime image | `alpine:3.24` → `alpine:3.24.4` + `apk upgrade --no-cache` |
+| zlib in the image | 1.3.2-r1 → 1.4-r0 |
+| golang.org/x/crypto | v0.55.0 → v0.59.0 |
+| golang.org/x/sys | v0.47.0 → v0.50.0 |
+| modernc.org/libc | v1.73.4 → v1.73.5 |
+| mattn/go-isatty | v0.0.20 → v0.0.24 |
+
+README and SETUP now say Go 1.27+.
+
+**The zlib catch.** Alpine 3.24.4, the newest point release, still ships zlib
+1.3.2-r1; 1.4-r0 exists only in the v3.24 package repo. A base-image bump alone
+would not have fixed it, so the runtime stage runs `apk upgrade --no-cache`.
+Docker caches that layer, so production rebuilds need `--pull --no-cache`.
+
+**x/crypto** went past a patch bump on purpose: v0.55.0 carries three
+module-level advisories (`x/crypto/ssh` deadlocks, unmaintained `openpgp`).
+govulncheck showed the code never calls them, but Grype flags by module
+version. `modernc.org/sqlite` stayed at v1.53.0: newer releases are minor
+bumps with no advisories.
+
+### Go 1.25 → 1.27 breaking changes reviewed
+
+No code changes were needed. The ones that touch this code:
+
+- **1.26, ServeMux:** trailing-slash redirects are 307 instead of 301, so
+  `/admin` → `/admin/` is no longer cached permanently by browsers.
+- **1.27, encoding/json:** now backed by the v2 implementation. Same behavior,
+  error text may differ. No test asserts on JSON error text; every WebSocket
+  message goes through it.
+- **1.26, net/url:** stricter about colons in hosts. `originAllowed` compares
+  strings and never parses URLs, so unaffected.
+- **1.27, gofmt and vet:** alignment tweak and a new `%w`-pointer printf check.
+  Both clean, so the CI gofmt step still passes.
+- `asynctimerchan` removal, TLS GODEBUG removals, `Response.Body` draining:
+  not used or client-side only.
+
+### Verification
+
+- `go test ./...`: all 7 packages pass. WebSocket e2e and hub tests passed 3
+  runs in a row. `-race` unavailable locally (no cgo); CI ran it green.
+- govulncheck: no vulnerabilities. gofmt and vet clean on 1.27.4.
+- **Live WebSocket smoke test** against a production-flag build with
+  `ALLOWED_ORIGINS` set: foreign origin → 403; allowed origin joined, placed a
+  tower, started a wave, enemies spawned; 181 `game_state` frames in 3 s
+  (60/s). `/admin` → 307, `/health` → 200.
+- Client: `npm audit` 0 vulnerabilities (no changes needed); lint, 12 tests
+  and build pass.
+- **Docker (NinjaPC, Docker Desktop):** `docker build --pull --no-cache`
+  succeeded; image has zlib 1.4-r0, runs as 99:100, healthy. Grype
+  `--only-fixed`: "No vulnerabilities found".
+- CI on `8a61f35`: server, client and docker jobs all green.
+
+### Deploy (2026-11-12 00:10)
+
+Pulled `/mnt/user/appdata/rust-rush-src` through P6 Ops (`c1523f6` →
+`8a61f35`). Jaime rebuilt from the Unraid terminal with
+`docker compose build --pull --no-cache rust-rush && docker compose up -d rust-rush`;
+the `apk upgrade` step ran fresh. New container `ec1b0ffc` (was `89f23f43`),
+image `046613f1` (was `0b636c09`), healthy, 0 restarts, clean logs,
+`https://rust-rush.jaime.build/health` → 200.
+
+### Left unfixed
+
+- busybox CVE-2025-60876 (Medium, also `ssl_client`): no fix released. It's in
+  busybox `wget`, used only by the container's own health check against
+  localhost.

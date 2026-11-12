@@ -292,6 +292,10 @@ go run main.go
 >
 > The container runs as uid 99 / gid 100, so the host folder mounted at
 > `/data` must be owned by `99:100`.
+>
+> Rebuild with `docker compose build --pull --no-cache` (or `docker build --pull --no-cache`).
+> The runtime stage runs `apk upgrade` so Alpine security fixes land before the
+> next point release, and a cached layer would keep the old packages.
 
 ### Development mode (hot reload)
 
